@@ -21,8 +21,8 @@ use heapless::String;
 
 // this is pissed but its still the correct way to do it. 
 // env variables are stored in the shell environment and are loaded at compile time
-// const SSID: &str = env!("RUST_ESP32_STD_DEMO_WIFI_SSID");
-// const PASS: &str = env!("RUST_ESP32_STD_DEMO_WIFI_PASS");
+const SSID: &str = env!("RUST_ESP32_STD_DEMO_WIFI_SSID");
+const PASS: &str = env!("RUST_ESP32_STD_DEMO_WIFI_PASS");
 
 fn main() {
     // It is necessary to call this function once. Otherwise some patches to the runtime
@@ -89,9 +89,9 @@ async fn connect_wifi(wifi: &mut AsyncWifi<EspWifi<'static>>) -> anyhow::Result<
     
     // allocate memory for SSID and PASS env variables 
     let mut ssid: String<32> = String::new();
-    ssid.push_str("ULTRANET").unwrap();
+    ssid.push_str(SSID).unwrap();
     let mut password: String<64> = String::new(); // has to be <64> per the configuration
-    password.push_str("bobloblaw5353").unwrap();
+    password.push_str(PASS).unwrap();
 
     let wifi_configuration: WifiConfiguration = WifiConfiguration::Client(ClientConfiguration{
         ssid,
