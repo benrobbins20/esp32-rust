@@ -3,7 +3,7 @@ use std::{thread::sleep, time::Duration, sync::{Mutex, Arc}};
 
 
 use anyhow::Ok;
-use esp_idf_hal::prelude::Peripherals;
+use esp_idf_hal::{gpio::PinDriver, prelude::Peripherals};
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::http::server::EspHttpServer;
 use esp_idf_svc::timer::{EspTaskTimerService};
@@ -46,11 +46,15 @@ fn main() {
 
     // Create http server endpoint, set default values like port 80, 443, timeout, etc.
     let mut server = EspHttpServer::new(&Default::default()).unwrap();
+    
+    // led - gpio 21 on the xaio esp32s3, wrap the gpio in PinDriver
+    let led = Arc::new(Mutex::new(PinDriver::output(peripherals.pins.gpio21).unwrap()));
 
     server.fn_handler("/", embedded_svc::http::Method::Get, move |req| {
         // lambda function/closure for request
         let mut response = req.into_ok_response().unwrap();
         response.write("ESP32 Web Server".as_bytes()).unwrap();
+        led.lock().unwrap().toggle().unwrap();
         Ok(())
     }).unwrap();
 
