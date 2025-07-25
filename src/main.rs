@@ -3,7 +3,7 @@ use std::{thread::sleep, time::Duration, sync::{Mutex, Arc}};
 
 
 use anyhow::Ok;
-use esp_idf_hal::{gpio::PinDriver, prelude::Peripherals};
+use esp_idf_hal::{gpio::PinDriver, ledc::{config::TimerConfig, LedcDriver, LedcTimerDriver}, prelude::Peripherals, units::FromValueType};
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::http::server::EspHttpServer;
 use esp_idf_svc::timer::{EspTaskTimerService};
@@ -18,6 +18,7 @@ use esp_idf_svc::hal::peripheral::Peripheral;
 use esp_idf_svc::nvs::EspNvsPartition;
 use esp_idf_svc::nvs::NvsDefault;
 use heapless::String;
+use std::str::from_utf8;
 
 // this is pissed but its still the correct way to do it. 
 // env variables are stored in the shell environment and are loaded at compile time
@@ -48,13 +49,33 @@ fn main() {
     let mut server = EspHttpServer::new(&Default::default()).unwrap();
     
     // led - gpio 21 on the xaio esp32s3, wrap the gpio in PinDriver
-    let led = Arc::new(Mutex::new(PinDriver::output(peripherals.pins.gpio21).unwrap()));
+    // let led = Arc::new(Mutex::new(PinDriver::output(peripherals.pins.gpio21).unwrap()));
+    
+    // setup servo timer
+    let servo_timer = peripherals.ledc.timer1;
+    let servo_driver = LedcTimerDriver::new(servo_timer, &TimerConfig::new().frequency(50_u32.Hz()).resolution(esp_idf_hal::ledc::Resolution::Bits14)).unwrap();
+    let servo = Arc::new(Mutex::new(LedcDriver::new(peripherals.ledc.channel3, servo_driver, peripherals.pins.gpio1).unwrap()));
 
-    server.fn_handler("/", embedded_svc::http::Method::Get, move |req| {
-        // lambda function/closure for request
-        let mut response = req.into_ok_response().unwrap();
-        response.write("ESP32 Web Server".as_bytes()).unwrap();
-        led.lock().unwrap().toggle().unwrap();
+    // 
+    let max_duty = servo.lock().unwrap().get_max_duty();
+    let min = max_duty / 40;
+    let max = max_duty / 8;
+
+    fn interpolate(angle: u32, min: u32, max: u32) -> u32 {
+        // angle in degrees, min and max is duty cycle range, servo rotates 0-180 degrees, offset from the minimum
+        angle * (max-min) / 180 + min
+    }
+
+
+    server.fn_handler("/servo", embedded_svc::http::Method::Post, move |mut req| {
+        let mut buffer = [0_u8;6];
+        let bytes_read = req.read(&mut buffer).unwrap();
+        let angle_string = from_utf8(&buffer[0..bytes_read]).unwrap();
+        let angle: u32 = angle_string.parse().unwrap();
+
+        servo.lock().unwrap().set_duty(interpolate(angle, min, max)).unwrap();
+
+        // led.lock().unwrap().toggle().unwrap();
         Ok(())
     }).unwrap();
 
