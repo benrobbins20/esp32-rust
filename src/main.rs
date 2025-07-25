@@ -49,23 +49,41 @@ fn main() {
     let mut server = EspHttpServer::new(&Default::default()).unwrap();
     
     // led - gpio 21 on the xaio esp32s3, wrap the gpio in PinDriver
-    // let led = Arc::new(Mutex::new(PinDriver::output(peripherals.pins.gpio21).unwrap()));
+    let led = Arc::new(Mutex::new(PinDriver::output(peripherals.pins.gpio21).unwrap()));
     
     // setup servo timer
     let servo_timer = peripherals.ledc.timer1;
     let servo_driver = LedcTimerDriver::new(servo_timer, &TimerConfig::new().frequency(50_u32.Hz()).resolution(esp_idf_hal::ledc::Resolution::Bits14)).unwrap();
     let servo = Arc::new(Mutex::new(LedcDriver::new(peripherals.ledc.channel3, servo_driver, peripherals.pins.gpio1).unwrap()));
 
-    // 
+    // 50Hz, 1 cycle in 20 ms
+    // duty cycles is how many ticks per 20ms, with 14 bit resolution, 
+
+    // standard sweep 
+    // 5% ~819/16383 1ms
+    // 10% ~1638/16383 2ms
+
+    // wide sweep
+    // 2.5% ~409/16383 .5ms
+    // 12.5% ~2048/16383 2.5ms
+
     let max_duty = servo.lock().unwrap().get_max_duty();
-    let min = max_duty / 40;
-    let max = max_duty / 8;
+    let min = max_duty / 40; // 2.5%
+    let max = max_duty / 8; // 12.5%
 
     fn interpolate(angle: u32, min: u32, max: u32) -> u32 {
-        // angle in degrees, min and max is duty cycle range, servo rotates 0-180 degrees, offset from the minimum
-        angle * (max-min) / 180 + min
+        let mut total;
+        // total bit range is max - min
+        total = max - min;
+        // map degrees to bits, ~9 bits per degree
+        total /= 180; 
+        // desired angle * bits per degree
+        total *= angle;
+        // offset desired angle by the minimum duty cycle
+        total += min;
+        
+        total
     }
-
 
     server.fn_handler("/servo", embedded_svc::http::Method::Post, move |mut req| {
         let mut buffer = [0_u8;6];
@@ -75,7 +93,7 @@ fn main() {
 
         servo.lock().unwrap().set_duty(interpolate(angle, min, max)).unwrap();
 
-        // led.lock().unwrap().toggle().unwrap();
+        led.lock().unwrap().toggle().unwrap();
         Ok(())
     }).unwrap();
 
