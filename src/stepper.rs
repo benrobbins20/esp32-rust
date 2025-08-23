@@ -1,3 +1,4 @@
+use accel_stepper::Device;
 use esp_idf_hal::gpio::{PinDriver, OutputPin, Output};
 
 pub struct Stepper <N: OutputPin, E: OutputPin, S: OutputPin, W: OutputPin> {
@@ -7,6 +8,17 @@ pub struct Stepper <N: OutputPin, E: OutputPin, S: OutputPin, W: OutputPin> {
     p4: PinDriver<'static, W, Output>,
 }
 
+// impl device trait for accel_stepper
+impl<N: OutputPin, E: OutputPin, S: OutputPin, W: OutputPin> Device for Stepper<N, E, S, W> {
+    type Error = ();
+
+    fn step(&mut self, ctx: &accel_stepper::StepContext) -> Result<(), Self::Error> {
+        self.step(ctx.position);
+        Ok(())
+    }
+}
+
+// generic implementation for stepper
 impl <N: OutputPin, E: OutputPin, S: OutputPin, W: OutputPin> Stepper <N, E, S, W> {
     pub fn new(p1: N, p2: E, p3: S, p4: W) -> Self {
         Self {

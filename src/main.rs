@@ -18,6 +18,10 @@ use esp_idf_svc::nvs::NvsDefault;
 use heapless::String;
 use std::str::from_utf8;
 use embedded_svc::http::Method::Get;
+use accel_stepper::{Driver, OperatingSystemClock, SystemClock};
+use esp_idf_hal::delay::FreeRtos;
+
+
 
 // bring in stepper file
 mod stepper;
@@ -59,13 +63,22 @@ fn main() {
     // let servo_driver = LedcTimerDriver::new(servo_timer, &TimerConfig::new().frequency(50_u32.Hz()).resolution(esp_idf_hal::ledc::Resolution::Bits14)).unwrap();
     // let servo = Arc::new(Mutex::new(LedcDriver::new(peripherals.ledc.channel3, servo_driver, peripherals.pins.gpio1).unwrap()));
 
-    let mut stepper = Arc::new(Mutex::new(stepper::Stepper::new(
+    
+    let mut stepper = stepper::Stepper::new(
         peripherals.pins.gpio1,
         peripherals.pins.gpio2,
         peripherals.pins.gpio3,
         peripherals.pins.gpio4
-    )));
+    );
 
+
+    let mut driver = Driver::default();
+    driver.set_max_speed(500.0);
+    driver.set_acceleration(100.0);
+    let driver = Arc::new(Mutex::new(driver));
+    let http_driver = driver.clone();
+
+    let clock = OperatingSystemClock::new();
 
     // 50Hz, 1 cycle in 20 ms
     // duty cycles is how many ticks per 20ms, with 14 bit resolution, 
@@ -114,20 +127,20 @@ fn main() {
 
     //   
     server.fn_handler("/stepper", Get, move |mut req| {
-        // create a local instance of stepper
-        let mut s = stepper.lock().unwrap();
-        for i in 0..1000 {
-            s.step(i);
-            std::thread::sleep(Duration::from_millis(2));
-        }
-        s.stop();
+        http_driver.lock().unwrap().move_by(2048);
         Ok(())
     }).unwrap();
 
+    // must poll fast enough to be within step duration
     loop {
-        sleep(Duration::from_secs(1));
+        driver.lock().unwrap().poll(&mut stepper, &clock);
+        // sleep(Duration::from_micros(2000)); //2ms
+        // esp_idf_hal::task::yield_now();
+        FreeRtos::delay_ms(2);
+
     }
 }
+
 
 pub fn wifi (
     // modem implements the Peripheral trait, P type must be esp_idf_hal::modem::Modem type
