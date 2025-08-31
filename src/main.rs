@@ -1,5 +1,5 @@
 
-use std::{thread::sleep, time::Duration, sync::{Mutex, Arc}};
+use std::{collections::HashMap, sync::{Arc, Mutex}, thread::sleep, time::Duration};
 use anyhow::Ok;
 use esp_idf_hal::{gpio::PinDriver, ledc::{config::TimerConfig, LedcDriver, LedcTimerDriver}, prelude::Peripherals, units::FromValueType};
 use esp_idf_svc::eventloop::EspSystemEventLoop;
@@ -125,19 +125,21 @@ fn main() {
         Ok(())
     }).unwrap();
 
-    //   
+    // http stepper handler
     server.fn_handler("/stepper", Get, move |mut req| {
-        http_driver.lock().unwrap().move_by(2048);
+        let uri = req.uri();
+        let parts = uri.split_once("?").map(|(_, query_params)| query_params).unwrap_or(""); 
+        let params: HashMap<&str, &str> = parts.split("&").filter_map(|param| param.split_once("=")).collect();
+        let command: i64 = params.get("command").unwrap_or(&"").parse().unwrap_or(0);
+
+        http_driver.lock().unwrap().move_by(command);
         Ok(())
     }).unwrap();
 
     // must poll fast enough to be within step duration
     loop {
         driver.lock().unwrap().poll(&mut stepper, &clock);
-        // sleep(Duration::from_micros(2000)); //2ms
-        // esp_idf_hal::task::yield_now();
         FreeRtos::delay_ms(2);
-
     }
 }
 

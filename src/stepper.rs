@@ -32,25 +32,25 @@ impl <N: OutputPin, E: OutputPin, S: OutputPin, W: OutputPin> Stepper <N, E, S, 
     pub fn step(&mut self, step: i64) {
 
         // simple stepping method
-        if (step % 4) == 0 {
+        if step.rem_euclid(4) == 0 {
             self.p1.set_high().unwrap();
             self.p2.set_low().unwrap();
             self.p3.set_low().unwrap();
             self.p4.set_low().unwrap();
         }
-        else if (step % 4) == 1 {
+        if step.rem_euclid(4) == 1 {
             self.p1.set_low().unwrap();
             self.p2.set_high().unwrap();
             self.p3.set_low().unwrap();
             self.p4.set_low().unwrap();
         }
-        else if (step % 4) == 2 {
+        if step.rem_euclid(4) == 2 {
             self.p1.set_low().unwrap();
             self.p2.set_low().unwrap();
             self.p3.set_high().unwrap();
             self.p4.set_low().unwrap();
         }
-        else if (step % 4) == 3 {
+        if step.rem_euclid(4) == 3 {
             self.p1.set_low().unwrap();
             self.p2.set_low().unwrap();
             self.p3.set_low().unwrap();
