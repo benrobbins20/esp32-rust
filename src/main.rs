@@ -127,10 +127,10 @@ fn main() {
 
     // http stepper handler
     server.fn_handler("/stepper", Get, move |mut req| {
-        let uri = req.uri();
-        let parts = uri.split_once("?").map(|(_, query_params)| query_params).unwrap_or(""); 
-        let params: HashMap<&str, &str> = parts.split("&").filter_map(|param| param.split_once("=")).collect();
-        let command: i64 = params.get("command").unwrap_or(&"").parse().unwrap_or(0);
+        let uri = req.uri(); // /stepper?command=1000
+        let parts = uri.split_once("?").map(|(_, query_params)| query_params).unwrap_or(""); // command=1000
+        let params: HashMap<&str, &str> = parts.split("&").filter_map(|param| param.split_once("=")).collect(); // place the key:value into collection (hashmap)
+        let command: i64 = params.get("command").unwrap_or(&"").parse().unwrap_or(0); // get the value for key command, default 0
 
         http_driver.lock().unwrap().move_by(command);
         Ok(())
