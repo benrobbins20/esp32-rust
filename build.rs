@@ -1,7 +1,4 @@
 fn main() {
-<<<<<<< HEAD
-    embuild::espidf::sysenv::output();
-=======
     linker_be_nice();
     // make sure linkall.x is the last linker script (otherwise might cause problems with flip-link)
     println!("cargo:rustc-link-arg=-Tlinkall.x");
@@ -52,5 +49,4 @@ fn linker_be_nice() {
         "cargo:rustc-link-arg=-Wl,--error-handling-script={}",
         std::env::current_exe().unwrap().display()
     );
->>>>>>> origin/esp32s3-embassy-blinky
 }
