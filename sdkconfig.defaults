@@ -9,9 +9,7 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=8000
 #CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=n
 #CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=n
 
-
 CONFIG_PARTITION_TABLE_SINGLE_APP=n
 CONFIG_PARTITION_TABLE_CUSTOM=y
 # use rel path. this is very weird but just a function of the cmake sdk config stuff buried deep in the build directory
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="../../../../../../partitions.csv"
-

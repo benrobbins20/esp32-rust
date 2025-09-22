@@ -1,9 +1,7 @@
 
-use std::{thread::sleep, time::Duration, sync::{Mutex, Arc}};
-
-
+use std::{str::from_utf8, sync::{Arc, Mutex}, thread::sleep, time::Duration};
 use anyhow::Ok;
-use esp_idf_hal::{gpio::PinDriver, prelude::Peripherals};
+use esp_idf_hal::{gpio::PinDriver, io::Read, prelude::Peripherals};
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::http::server::EspHttpServer;
 use esp_idf_svc::timer::{EspTaskTimerService};
@@ -18,11 +16,40 @@ use esp_idf_svc::hal::peripheral::Peripheral;
 use esp_idf_svc::nvs::EspNvsPartition;
 use esp_idf_svc::nvs::NvsDefault;
 use heapless::String;
+use std::iter::Iterator;
+
+
+use ws2812_esp32_rmt_driver::driver::color::LedPixelColorGrbw32;
+use ws2812_esp32_rmt_driver::{LedPixelEsp32Rmt, RGBW8};
+use smart_leds_trait::{SmartLedsWrite, White};
+
+
+
 
 // this is pissed but its still the correct way to do it. 
 // env variables are stored in the shell environment and are loaded at compile time
 const SSID: &str = env!("RUST_ESP32_STD_DEMO_WIFI_SSID");
 const PASS: &str = env!("RUST_ESP32_STD_DEMO_WIFI_PASS");
+
+// color struct and parse 
+#[derive(Debug)]
+struct Color {
+    r: u8,
+    g: u8,
+    b: u8,
+}
+impl TryFrom<&str> for Color {
+    type Error = anyhow::Error;
+    
+    fn try_from(input: &str) -> anyhow::Result<Self> {
+        Ok(Color {
+            r: u8::from_str_radix(&input[0..2], 16)?,
+            g: u8::from_str_radix(&input[2..4], 16)?,
+            b: u8::from_str_radix(&input[4..6], 16)?
+        })
+    }
+}
+
 
 fn main() {
     // It is necessary to call this function once. Otherwise some patches to the runtime
@@ -44,17 +71,46 @@ fn main() {
         timer_service).unwrap();
     log::info!("Wifi started: {:?}", wifi_result.wifi().sta_netif().get_ip_info());
 
+
     // Create http server endpoint, set default values like port 80, 443, timeout, etc.
     let mut server = EspHttpServer::new(&Default::default()).unwrap();
     
-    // led - gpio 21 on the xaio esp32s3, wrap the gpio in PinDriver
-    let led = Arc::new(Mutex::new(PinDriver::output(peripherals.pins.gpio21).unwrap()));
+    // led - gpio 21 on the xaio esp32s3, gpio 2 for esp32-c3-devkit-RUST-1
+    // let led = Arc::new(Mutex::new(PinDriver::output(peripherals.pins.gpio2).unwrap()));
+    
+    // let mut led = WS2812RMT::new(peripherals.pins.gpio2, peripherals.rmt.channel0).unwrap();
+    // led.set_pixel(RGB8::new(50, 50, 0)).unwrap();
 
-    server.fn_handler("/", embedded_svc::http::Method::Get, move |req| {
+    let led_pin = peripherals.pins.gpio2;
+    let channel = peripherals.rmt.channel0;
+    let ws2812 = LedPixelEsp32Rmt::<RGBW8, LedPixelColorGrbw32>::new(channel, led_pin).unwrap();
+    
+    // wrap the rmt driver in arc mutex to allow shared access
+    let ws2812 = Arc::new(Mutex::new(ws2812));
+    // clone is a pointer to the driver
+    let ws2812_handle = ws2812.clone();
+
+    
+    server.fn_handler("/color", embedded_svc::http::Method::Post, move |mut req| {
         // lambda function/closure for request
-        let mut response = req.into_ok_response().unwrap();
-        response.write("ESP32 Web Server".as_bytes()).unwrap();
-        led.lock().unwrap().toggle().unwrap();
+
+        // buffer for post data
+        let mut buffer = [0u8;6];
+        req.read_exact(&mut buffer)?;
+        let color: Color = from_utf8(&buffer)?.try_into()?;
+        println!("Color: {:?}", color);
+        let mut response = req.into_ok_response()?;
+        response.write("ESP32 Web Server".as_bytes())?;
+        
+
+        // led.lock().unwrap().toggle()?;
+
+        // block until pointer mutex can be acquired, create mutable reference local to the closure
+        let mut ws2812 = ws2812_handle.lock().unwrap();
+
+        let pixels = std::iter::repeat(RGBW8 {r: color.r, g: color.g, b: color.b, a: White(30)}).take(1);
+        ws2812.write(pixels).unwrap();
+
         Ok(())
     }).unwrap();
 
