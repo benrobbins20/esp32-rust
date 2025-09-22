@@ -1,13 +1,13 @@
 [package]
-name = "rust-esp32c3"
+name = "rust-esp32-http-stepper"
 version = "0.1.0"
-authors = ["Ben Robbins <benro2211@gmail.com>"]
+authors = ["benro"]
 edition = "2021"
 resolver = "2"
 rust-version = "1.77"
 
 [[bin]]
-name = "rust-esp32c3"
+name = "rust-esp32-http-stepper"
 harness = false # do not use the built in cargo test harness -> resolve rust-analyzer errors
 
 [profile.release]
@@ -24,19 +24,12 @@ experimental = ["esp-idf-svc/experimental"]
 
 [dependencies]
 log = "0.4"
-esp-idf-svc = "^0.50.1"
-esp-idf-sys = "0.36.1"
-embedded-hal = "1.0.0"
-embedded-svc = "0.28.1"
-anyhow = "^1.0.98"
-futures = "0.3.31"
-heapless = "0.8.0"
-portable-atomic = { version = "1.11.1", default-features = false }
-rgb-led = { path = "lib/rgb-led" }
-ws2812-esp32-rmt-driver = { version = "*", features = ["smart-leds-trait"] }
+esp-idf-svc = "0.51"
 esp-idf-hal = "0.45.2"
-smart-leds = "0.4.0"
-smart-leds-trait = "0.3.1"
+heapless = "0.8.0"
+anyhow = "1.0.98"
+embedded-svc = "0.28.1"
+futures = "0.3.31"
 
 # --- Optional Embassy Integration ---
 # esp-idf-svc = { version = "0.51", features = ["critical-section", "embassy-time-driver", "embassy-sync"] }
@@ -57,4 +50,3 @@ smart-leds-trait = "0.3.1"
 
 [build-dependencies]
 embuild = "0.33"
-

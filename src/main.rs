@@ -1,5 +1,4 @@
-
-use std::{str::from_utf8, sync::{Arc, Mutex}, thread::sleep, time::Duration};
+use std::{thread::sleep, time::Duration, sync::{Mutex, Arc}};
 use anyhow::Ok;
 use esp_idf_hal::{gpio::PinDriver, ledc::{config::TimerConfig, LedcDriver, LedcTimerDriver}, prelude::Peripherals, units::FromValueType};
 use esp_idf_svc::eventloop::EspSystemEventLoop;
@@ -16,31 +15,17 @@ use esp_idf_svc::hal::peripheral::Peripheral;
 use esp_idf_svc::nvs::EspNvsPartition;
 use esp_idf_svc::nvs::NvsDefault;
 use heapless::String;
+use std::str::from_utf8;
+use embedded_svc::http::Method::Get;
+
+// bring in stepper file
+mod stepper;
+use stepper::Stepper;
 
 // this is pissed but its still the correct way to do it. 
 // env variables are stored in the shell environment and are loaded at compile time
 const SSID: &str = env!("RUST_ESP32_STD_DEMO_WIFI_SSID");
 const PASS: &str = env!("RUST_ESP32_STD_DEMO_WIFI_PASS");
-
-// color struct and parse 
-#[derive(Debug)]
-struct Color {
-    r: u8,
-    g: u8,
-    b: u8,
-}
-impl TryFrom<&str> for Color {
-    type Error = anyhow::Error;
-    
-    fn try_from(input: &str) -> anyhow::Result<Self> {
-        Ok(Color {
-            r: u8::from_str_radix(&input[0..2], 16)?,
-            g: u8::from_str_radix(&input[2..4], 16)?,
-            b: u8::from_str_radix(&input[4..6], 16)?
-        })
-    }
-}
-
 
 fn main() {
     // It is necessary to call this function once. Otherwise some patches to the runtime
@@ -62,7 +47,6 @@ fn main() {
         timer_service).unwrap();
     log::info!("Wifi started: {:?}", wifi_result.wifi().sta_netif().get_ip_info());
 
-
     // Create http server endpoint, set default values like port 80, 443, timeout, etc.
     let mut server = EspHttpServer::new(&Default::default()).unwrap();
     
@@ -70,9 +54,17 @@ fn main() {
     let led = Arc::new(Mutex::new(PinDriver::output(peripherals.pins.gpio21).unwrap()));
     
     // setup servo timer
-    let servo_timer = peripherals.ledc.timer1;
-    let servo_driver = LedcTimerDriver::new(servo_timer, &TimerConfig::new().frequency(50_u32.Hz()).resolution(esp_idf_hal::ledc::Resolution::Bits14)).unwrap();
-    let servo = Arc::new(Mutex::new(LedcDriver::new(peripherals.ledc.channel3, servo_driver, peripherals.pins.gpio1).unwrap()));
+    // let servo_timer = peripherals.ledc.timer1;
+    // let servo_driver = LedcTimerDriver::new(servo_timer, &TimerConfig::new().frequency(50_u32.Hz()).resolution(esp_idf_hal::ledc::Resolution::Bits14)).unwrap();
+    // let servo = Arc::new(Mutex::new(LedcDriver::new(peripherals.ledc.channel3, servo_driver, peripherals.pins.gpio1).unwrap()));
+
+    let mut stepper = Arc::new(Mutex::new(stepper::Stepper::new(
+        peripherals.pins.gpio1,
+        peripherals.pins.gpio2,
+        peripherals.pins.gpio3,
+        peripherals.pins.gpio4
+    )));
+
 
     // 50Hz, 1 cycle in 20 ms
     // duty cycles is how many ticks per 20ms, with 14 bit resolution, 
@@ -85,9 +77,12 @@ fn main() {
     // 2.5% ~409/16383 .5ms
     // 12.5% ~2048/16383 2.5ms
 
-    let max_duty = servo.lock().unwrap().get_max_duty();
-    let min = max_duty / 40; // 2.5%
-    let max = max_duty / 8; // 12.5%
+    // setup Stepper struct for simple stepping
+    // let stepper::Stepper::
+
+    // let max_duty = servo.lock().unwrap().get_max_duty();
+    // let min = max_duty / 40; // 2.5%
+    // let max = max_duty / 8; // 12.5%
 
     fn interpolate(angle: u32, min: u32, max: u32) -> u32 {
         let mut total;
@@ -103,15 +98,28 @@ fn main() {
         total
     }
 
+    // servo http handler
     server.fn_handler("/servo", embedded_svc::http::Method::Post, move |mut req| {
         let mut buffer = [0_u8;6];
         let bytes_read = req.read(&mut buffer).unwrap();
         let angle_string = from_utf8(&buffer[0..bytes_read]).unwrap();
         let angle: u32 = angle_string.parse().unwrap();
 
-        servo.lock().unwrap().set_duty(interpolate(angle, min, max)).unwrap();
+        // servo.lock().unwrap().set_duty(interpolate(angle, min, max)).unwrap();
 
-        led.lock().unwrap().toggle().unwrap();
+        // led.lock().unwrap().toggle().unwrap();
+        Ok(())
+    }).unwrap();
+
+    //   
+    server.fn_handler("/stepper", Get, move |mut req| {
+        // create a local instance of stepper
+        let mut s = stepper.lock().unwrap();
+        for i in 0..1000 {
+            s.step(i);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        s.stop();
         Ok(())
     }).unwrap();
 
