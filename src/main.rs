@@ -1,7 +1,7 @@
 
 use std::{str::from_utf8, sync::{Arc, Mutex}, thread::sleep, time::Duration};
 use anyhow::Ok;
-use esp_idf_hal::{gpio::PinDriver, io::Read, prelude::Peripherals};
+use esp_idf_hal::{gpio::PinDriver, ledc::{config::TimerConfig, LedcDriver, LedcTimerDriver}, prelude::Peripherals, units::FromValueType};
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::http::server::EspHttpServer;
 use esp_idf_svc::timer::{EspTaskTimerService};
@@ -16,6 +16,7 @@ use esp_idf_svc::hal::peripheral::Peripheral;
 use esp_idf_svc::nvs::EspNvsPartition;
 use esp_idf_svc::nvs::NvsDefault;
 use heapless::String;
+<<<<<<< HEAD
 use std::iter::Iterator;
 
 
@@ -25,6 +26,9 @@ use smart_leds_trait::{SmartLedsWrite, White};
 
 
 
+=======
+use std::str::from_utf8;
+>>>>>>> origin/esp32s3-http-servo
 
 // this is pissed but its still the correct way to do it. 
 // env variables are stored in the shell environment and are loaded at compile time
@@ -75,42 +79,52 @@ fn main() {
     // Create http server endpoint, set default values like port 80, 443, timeout, etc.
     let mut server = EspHttpServer::new(&Default::default()).unwrap();
     
-    // led - gpio 21 on the xaio esp32s3, gpio 2 for esp32-c3-devkit-RUST-1
-    // let led = Arc::new(Mutex::new(PinDriver::output(peripherals.pins.gpio2).unwrap()));
+    // led - gpio 21 on the xaio esp32s3, wrap the gpio in PinDriver
+    let led = Arc::new(Mutex::new(PinDriver::output(peripherals.pins.gpio21).unwrap()));
     
-    // let mut led = WS2812RMT::new(peripherals.pins.gpio2, peripherals.rmt.channel0).unwrap();
-    // led.set_pixel(RGB8::new(50, 50, 0)).unwrap();
+    // setup servo timer
+    let servo_timer = peripherals.ledc.timer1;
+    let servo_driver = LedcTimerDriver::new(servo_timer, &TimerConfig::new().frequency(50_u32.Hz()).resolution(esp_idf_hal::ledc::Resolution::Bits14)).unwrap();
+    let servo = Arc::new(Mutex::new(LedcDriver::new(peripherals.ledc.channel3, servo_driver, peripherals.pins.gpio1).unwrap()));
 
-    let led_pin = peripherals.pins.gpio2;
-    let channel = peripherals.rmt.channel0;
-    let ws2812 = LedPixelEsp32Rmt::<RGBW8, LedPixelColorGrbw32>::new(channel, led_pin).unwrap();
-    
-    // wrap the rmt driver in arc mutex to allow shared access
-    let ws2812 = Arc::new(Mutex::new(ws2812));
-    // clone is a pointer to the driver
-    let ws2812_handle = ws2812.clone();
+    // 50Hz, 1 cycle in 20 ms
+    // duty cycles is how many ticks per 20ms, with 14 bit resolution, 
 
-    
-    server.fn_handler("/color", embedded_svc::http::Method::Post, move |mut req| {
-        // lambda function/closure for request
+    // standard sweep 
+    // 5% ~819/16383 1ms
+    // 10% ~1638/16383 2ms
 
-        // buffer for post data
-        let mut buffer = [0u8;6];
-        req.read_exact(&mut buffer)?;
-        let color: Color = from_utf8(&buffer)?.try_into()?;
-        println!("Color: {:?}", color);
-        let mut response = req.into_ok_response()?;
-        response.write("ESP32 Web Server".as_bytes())?;
+    // wide sweep
+    // 2.5% ~409/16383 .5ms
+    // 12.5% ~2048/16383 2.5ms
+
+    let max_duty = servo.lock().unwrap().get_max_duty();
+    let min = max_duty / 40; // 2.5%
+    let max = max_duty / 8; // 12.5%
+
+    fn interpolate(angle: u32, min: u32, max: u32) -> u32 {
+        let mut total;
+        // total bit range is max - min
+        total = max - min;
+        // map degrees to bits, ~9 bits per degree
+        total /= 180; 
+        // desired angle * bits per degree
+        total *= angle;
+        // offset desired angle by the minimum duty cycle
+        total += min;
         
+        total
+    }
 
-        // led.lock().unwrap().toggle()?;
+    server.fn_handler("/servo", embedded_svc::http::Method::Post, move |mut req| {
+        let mut buffer = [0_u8;6];
+        let bytes_read = req.read(&mut buffer).unwrap();
+        let angle_string = from_utf8(&buffer[0..bytes_read]).unwrap();
+        let angle: u32 = angle_string.parse().unwrap();
 
-        // block until pointer mutex can be acquired, create mutable reference local to the closure
-        let mut ws2812 = ws2812_handle.lock().unwrap();
+        servo.lock().unwrap().set_duty(interpolate(angle, min, max)).unwrap();
 
-        let pixels = std::iter::repeat(RGBW8 {r: color.r, g: color.g, b: color.b, a: White(30)}).take(1);
-        ws2812.write(pixels).unwrap();
-
+        led.lock().unwrap().toggle().unwrap();
         Ok(())
     }).unwrap();
 
