@@ -16,19 +16,6 @@ use esp_idf_svc::hal::peripheral::Peripheral;
 use esp_idf_svc::nvs::EspNvsPartition;
 use esp_idf_svc::nvs::NvsDefault;
 use heapless::String;
-<<<<<<< HEAD
-use std::iter::Iterator;
-
-
-use ws2812_esp32_rmt_driver::driver::color::LedPixelColorGrbw32;
-use ws2812_esp32_rmt_driver::{LedPixelEsp32Rmt, RGBW8};
-use smart_leds_trait::{SmartLedsWrite, White};
-
-
-
-=======
-use std::str::from_utf8;
->>>>>>> origin/esp32s3-http-servo
 
 // this is pissed but its still the correct way to do it. 
 // env variables are stored in the shell environment and are loaded at compile time
