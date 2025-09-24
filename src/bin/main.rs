@@ -37,6 +37,31 @@ const SSID: &str = env!("RUST_ESP32_STD_DEMO_WIFI_SSID");
 const PASS: &str = env!("RUST_ESP32_STD_DEMO_WIFI_PASS");
 
 const URL: &str = "http://192.168.8.210:8000/";
+// www.mobile-j.de
+// seems like a test site for rustwless..
+/*
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Nothing here</title>
+</head>
+<body>
+<pre>
+    __________________________
+    < Hello fellow Rustaceans! >
+     --------------------------
+            \
+             \
+                _~^~^~_
+            \) /  o o  \ (/
+              '_   -   _'
+              / '-----' \
+</pre>
+</body>
+</html>
+
+*/
 
 // make wifi_init RESULT static EspWifiController<'d>
 static WIFI_CONTROLLER: StaticCell<esp_wifi::EspWifiController<'static>> = StaticCell::new();
