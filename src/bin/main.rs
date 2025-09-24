@@ -24,7 +24,7 @@ use esp_wifi::wifi::{ClientConfiguration, WifiController, WifiDevice, WifiState}
 use log::{info, debug, error};
 use esp_println::println;
 use esp_hal::rng::Rng;
-use reqwless::client::HttpClient;
+use reqwless::client::{HttpClient, TlsConfig, TlsVerify};
 use reqwless::{request, response};
 use static_cell::StaticCell;
 extern crate alloc;
@@ -32,11 +32,12 @@ use esp_wifi::wifi::WifiEvent;
 use esp_wifi::wifi::Configuration as WifiConfiguration;
 use esp_wifi::wifi::AccessPointInfo;
 use reqwless::request::Method::GET;
+use embedded_io_async::Read;
 
 const SSID: &str = env!("RUST_ESP32_STD_DEMO_WIFI_SSID");
 const PASS: &str = env!("RUST_ESP32_STD_DEMO_WIFI_PASS");
 
-const URL: &str = "http://192.168.8.210:8000/";
+// const URL: &str = "http://192.168.8.210:8000/";
 // www.mobile-j.de
 // seems like a test site for rustwless..
 /*
@@ -62,6 +63,14 @@ const URL: &str = "http://192.168.8.210:8000/";
 </html>
 
 */
+const HTTP_URL: &str = "http://192.168.8.210:8000/";
+const HTTPS_URL: &str = "https://example.com/";
+
+// all of these are being weird
+// const HTTPS_URL: &str = "https://httpbin.org/get";
+// const HTTPS_URL: &str = "https://resttesttest.com/";
+// const HTTPS_URL: &str = "https://www.howsmyssl.com/";
+// const HTTPS_URL: &str = "https://google.com/";
 
 // make wifi_init RESULT static EspWifiController<'d>
 static WIFI_CONTROLLER: StaticCell<esp_wifi::EspWifiController<'static>> = StaticCell::new();
@@ -116,7 +125,6 @@ macro_rules! singleton {
         x
     }};
 }
-
 
 // create a blinky task
 #[embassy_executor::task]
@@ -197,10 +205,9 @@ async fn stack_runner(mut runner: Runner<'static, WifiDevice<'static>>) {
 
 // check IP related stuff
 #[embassy_executor::task]
-async fn ip_task(stack: &'static Stack<'static>) {
+async fn ip_task(stack: &'static Stack<'static>, tls_seed: u64) {
     info!("Starting IP task");
-
-
+    
     // wait for the stack to come up
     loop {
         if stack.is_link_up() {
@@ -225,45 +232,63 @@ async fn ip_task(stack: &'static Stack<'static>) {
     // create a embassy tcp client and send http with reqwless
     
     // tcp buffers
-    let mut rx_buf = [0; 4096];
-    let mut tx_buf = [0; 4096];
+    let mut rx_buf = [0; 10000];
+    let mut tx_buf = [0; 10000];
+
+    // tls buffers
+    let mut tls_read_buffer = [0; 4096];
+    let mut tls_write_buffer = [0; 4096];
 
     // set up the embassy-net client to pass to reqwless
     let client_state = TcpClientState::<4, 4096, 4096>::new();
     let client = TcpClient::new(stack.clone(), &client_state);
     let dns = DnsSocket::new(stack.clone());
 
-
+    // TLS setup - requires the root CA certificate of the server
+    let tls = TlsConfig::new(tls_seed, &mut tls_read_buffer, &mut tls_write_buffer, TlsVerify::None);
+    let mut https_client = HttpClient::new_with_tls(&client, &dns, tls);
 
     loop {
         // create and send request with reqwless
-        let mut http_client = HttpClient::new(&client, &dns);
+        // let mut http_client = HttpClient::new(&client, &dns);
+
+        // create https client
 
         // unwrapping was causing panics that couldnt be seen and it hung the scheduler
         // let mut request = http_client.request(reqwless::request::Method::GET, "http://192.168.8.210:8000/").await.unwrap();
 
         // handle bad request
-        let mut req = match http_client.request(GET, URL).await {
-            Ok(req) => req,
-            Err(e) => {
-                error!("Failed to create request: {:?}", e);
-                Timer::after(Duration::from_millis(500)).await;
-                continue; // skip to next loop iteration
-            }
-        };
+        // let mut req = match http_client.request(GET, HTTP_URL).await {
+        //     Ok(req) => req,
+        //     Err(e) => {
+        //         error!("Failed to create request: {:?}", e);
+        //         Timer::after(Duration::from_millis(500)).await;
+        //         continue; // skip to next loop iteration
+        //     }
+        // };
+
+        let mut req = https_client.request(GET, HTTPS_URL).await.unwrap();
         
         let resp = req.send(&mut rx_buf).await.unwrap();
 
 
         info!("{:?}",resp.status);
         // let body = response.body(); its not this simple?
-        let body = from_utf8(resp.body().read_to_end().await.unwrap());
+        //let body = from_utf8(resp.body().read_to_end().await.unwrap());
+
+        let body_bytes = resp.body().read_to_end().await.unwrap();
+        let body = from_utf8(&body_bytes).unwrap();
+
+
+        
+        // let body_read = embedded_io::Read::read(&rx_buf)
+
+        // getting chunked data, try with embedded_io_async::Read;
+        // let mut body = resp.body().Read
         info!("body: {:?}", body);
 
         Timer::after(Duration::from_millis(1000)).await;
-        }
-
-
+    }
 }
 
 #[esp_hal_embassy::main] 
@@ -302,7 +327,8 @@ async fn main(spawner: Spawner) {
 
     // configure wifi peripheral with 
     let mut rng = Rng::new(peripherals.RNG);
-    let seed = (rng.random() as u64) << 32 | rng.random() as u64; // card shuffle random seed
+    let nw_stack_seed = (rng.random() as u64) << 32 | rng.random() as u64; // card shuffle random seed
+    let tls_seed = (rng.random() as u64) << 32 | rng.random() as u64; // tls random seed
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     // this init() was returning EspWifiController<'d> 
     // 'd (rng, timg0) which live only as long 
@@ -342,7 +368,7 @@ async fn main(spawner: Spawner) {
         station,
         nw_config,
         singleton!(StackResources::new()),
-        seed
+        nw_stack_seed
     );
     let stack = STACK.init(stack);
 
@@ -355,7 +381,7 @@ async fn main(spawner: Spawner) {
     spawner.spawn(blinky_task(led)).unwrap();
     spawner.spawn(connection(wifi_controller)).unwrap();
     spawner.spawn(stack_runner(runner)).unwrap();
-    spawner.spawn(ip_task(stack)).unwrap();
+    spawner.spawn(ip_task(stack, tls_seed)).unwrap();
 
     // the tasks have a non-blocking loop
     // loop {
