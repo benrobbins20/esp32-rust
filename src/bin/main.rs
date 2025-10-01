@@ -15,7 +15,7 @@ use embassy_executor::Spawner;
 use embassy_net::tcp::client::{TcpClient, TcpClientState};
 use embassy_net::dns::DnsSocket;
 use embassy_net::{new, Config, DhcpConfig, Runner, Stack, StackResources};
-use embassy_time::{Duration, Timer, Instant};
+use embassy_time::{Delay, Duration, Instant, Timer};
 use esp_hal::gpio::{Level, OutputConfig};
 use esp_hal::{clock::CpuClock, gpio::Output};
 use esp_hal::timer::systimer::SystemTimer;
@@ -104,7 +104,7 @@ impl AppBuilder for AppProps {
     }
 }
 
-const WEB_TASK_POOL_SIZE: usize = 4;
+const WEB_TASK_POOL_SIZE: usize = 1;
 
 // async fn handler() -> impl IntoResponse {
 //     "hello from picoserve!"
@@ -121,6 +121,32 @@ async fn web_task(
     let mut tcp_rx_buffer = [0; 1024];
     let mut tcp_tx_buffer = [0; 1024];
     let mut http_buffer = [0; 2048];
+
+    stack.wait_link_up().await;
+    stack.wait_config_up().await;
+    
+    info!("Starting web-task");
+    
+    // wait for the stack to come up
+    loop {
+        if stack.is_link_up() {
+            break;
+        }
+        Timer::after(Duration::from_millis(500)).await;
+    }
+
+    info!("Network link is up");
+    info!("Obtaining IP address...");
+
+    // wait for ip address via dhcp
+    loop {
+        // Some(Option<StaticConfigV4>)
+        if let Some(config) = stack.config_v4() {
+            info!("IP address obtained: {}", config.address);
+            break;
+        }
+        Timer::after(Duration::from_millis(500)).await;
+    }
 
     // let app = Router::new()
     //     .route("/", get(handler))
@@ -347,7 +373,7 @@ async fn main(spawner: Spawner) {
 
     // this init() was returning EspWifiController<'d> 
     // 'd (rng, timg0) which live only as long 
-    let mut wifi_init = esp_wifi::init(timg0.timer0, rng).expect("WIFI/BLE controller");
+    let wifi_init = esp_wifi::init(timg0.timer0, rng).expect("WIFI/BLE controller");
     // let wifi_init = make_static!(EspWifiController<'static>, esp_wifi::init(timg0.timer0, rng));
     let wifi_ctrl = make_static_pico!(EspWifiController<'static>, wifi_init);
 
@@ -386,6 +412,7 @@ async fn main(spawner: Spawner) {
         make_static_pico!(StackResources::<16>, StackResources::<16>::new()),
         nw_stack_seed
     );
+
     
     // let stack = make_static_pico!(Stack<'static>, stack_);
 
@@ -409,11 +436,13 @@ async fn main(spawner: Spawner) {
 
     // TODO: Spawn some tasks
     let _ = spawner;
+    spawner.must_spawn(stack_runner(runner));
 
     spawner.spawn(blinky_task(led)).unwrap();
     spawner.spawn(connection(wifi_controller)).unwrap();
-    spawner.spawn(stack_runner(runner)).unwrap();
+    
     // // spawner.spawn(ip_task(stack, tls_seed)).unwrap();
+
     for id in 0..WEB_TASK_POOL_SIZE {
         spawner.spawn(web_task(id, stack, config, app));
     }
