@@ -5,6 +5,7 @@
     reason = "mem::forget is generally not safe to do with esp_hal types, especially those \
     holding buffers for the duration of a data transfer."
 )]
+#![feature(impl_trait_in_assoc_type)]
 
 use core::str::from_utf8;
 
@@ -21,48 +22,38 @@ use esp_hal::timer::systimer::SystemTimer;
 use esp_hal::timer::timg::TimerGroup;
 use esp_alloc::HEAP;
 use esp_wifi::wifi::{ClientConfiguration, WifiController, WifiDevice, WifiState};
+use esp_wifi::EspWifiController;
 use log::{info, debug, error};
 use esp_println::println;
 use esp_hal::rng::Rng;
+use picoserve::response::IntoResponse;
+use picoserve::routing::get;
 use reqwless::client::{HttpClient, TlsConfig, TlsVerify};
 use reqwless::{request, response};
-use static_cell::StaticCell;
+use picoserve::io::Socket;
+
+// use static_cell::{make_static, StaticCell};
 extern crate alloc;
 use esp_wifi::wifi::WifiEvent;
 use esp_wifi::wifi::Configuration as WifiConfiguration;
 use esp_wifi::wifi::AccessPointInfo;
 use reqwless::request::Method::GET;
-use embedded_io_async::Read;
+// use embedded_io_async::Read;
+use static_cell::{make_static, StaticCell};
+
+use picoserve::time::Timer as PicoTimer;
+use picoserve::{make_static as make_static_pico, Router};
+use picoserve::{AppBuilder, AppRouter};
+
+
+
 
 const SSID: &str = env!("RUST_ESP32_STD_DEMO_WIFI_SSID");
 const PASS: &str = env!("RUST_ESP32_STD_DEMO_WIFI_PASS");
 
 // const URL: &str = "http://192.168.8.210:8000/";
 // www.mobile-j.de
-// seems like a test site for rustwless..
-/*
 
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Nothing here</title>
-</head>
-<body>
-<pre>
-    __________________________
-    < Hello fellow Rustaceans! >
-     --------------------------
-            \
-             \
-                _~^~^~_
-            \) /  o o  \ (/
-              '_   -   _'
-              / '-----' \
-</pre>
-</body>
-</html>
-
-*/
 const HTTP_URL: &str = "http://192.168.8.210:8000/";
 const HTTPS_URL: &str = "https://example.com/";
 
@@ -73,10 +64,10 @@ const HTTPS_URL: &str = "https://example.com/";
 // const HTTPS_URL: &str = "https://google.com/";
 
 // make wifi_init RESULT static EspWifiController<'d>
-static WIFI_CONTROLLER: StaticCell<esp_wifi::EspWifiController<'static>> = StaticCell::new();
+// static WIFI_CONTROLLER: StaticCell<esp_wifi::EspWifiController<'static>> = StaticCell::new();
 
 // static stack
-static STACK: StaticCell<embassy_net::Stack<'static>> = StaticCell::new();
+// static STACK: StaticCell<embassy_net::Stack<'static>> = StaticCell::new();
 
 // no_std requires a panic handler, default to non-divergent (!) infinite loop 
 #[panic_handler]
@@ -88,42 +79,65 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
 esp_bootloader_esp_idf::esp_app_desc!();
 
-// setup heap manually
-// macro equivalent = esp_alloc::heap_allocator!(size: 72 * 1024)
-/* 
-#[global_allocator]
-static ALLOCATOR: EspHeap = esp_alloc::EspHeap::empty(); // like new(), our own instance of HEAP 
+// struct EmbassyTimer;
 
-fn init_heap() {
+// impl picoserve::Timer for EmbassyTimer {
+//     type Duration = embassy_time::Duration;
+//     type TimeoutError = embassy_time::TimeoutError;
 
-    // 72 KB of internal RAM, s3 has 512 KB
-    const SIZE: usize = 72 * 1024; 
+//     async fn run_with_timeout<F: core::future::Future>(
+//             &mut self,
+//             duration: Self::Duration,
+//             future: F,
+//         ) -> Result<F::Output, Self::TimeoutError> {
+//             embassy_time::with_timeout(duration, future).await
+//         }
+// }
 
-    // array[type: size]
-    // so a buffer of 72 KB of single bytes, init to 0x0
-       this is the OLD way, now HEAP is of type MaybeUninit which doesn't write 0s to buffer yet until 
-    static mut BUFFER: [u8; SIZE] = [0; SIZE]; 
+struct AppProps;
 
-    // has to be wrapped in unsafe because its a mutable static/global
-    // point to the first byte (*u8) of buffer, set size
-    // capabilities meaning, 
-    unsafe {
-        ALLOCATOR.add_region(HeapRegion::new(
-            BUFFER.as_mut_ptr() as *mut u8,
-            SIZE,
-            MemoryCapability::Internal.into()
-            ));
+impl AppBuilder for AppProps {
+    type PathRouter = impl picoserve::routing::PathRouter;
+
+    fn build_app(self) -> picoserve::Router<Self::PathRouter> {
+        picoserve::Router::new().route("/", get(|| async move { "Hello World" }))
     }
 }
-*/
 
-// create singleton for educational purposes
-macro_rules! singleton {
-    ($val:expr) => {{
-        static STATIC_CELL: StaticCell<StackResources<3>> = StaticCell::new();
-        let x = STATIC_CELL.init($val);
-        x
-    }};
+const WEB_TASK_POOL_SIZE: usize = 4;
+
+// async fn handler() -> impl IntoResponse {
+//     "hello from picoserve!"
+// }
+
+#[embassy_executor::task(pool_size = WEB_TASK_POOL_SIZE)]
+async fn web_task(
+    task_id: usize,
+    stack: embassy_net::Stack<'static>,
+    config: &'static picoserve::Config<Duration>,
+    app: &'static AppRouter<AppProps>
+) -> ! {
+    let port = 80;
+    let mut tcp_rx_buffer = [0; 1024];
+    let mut tcp_tx_buffer = [0; 1024];
+    let mut http_buffer = [0; 2048];
+
+    // let app = Router::new()
+    //     .route("/", get(handler))
+    // ;
+
+    picoserve::listen_and_serve(
+        task_id,
+        app,
+        config,
+        stack,
+        port,
+        &mut tcp_rx_buffer,
+        &mut tcp_tx_buffer,
+        &mut http_buffer,
+    )
+    .await
+    
 }
 
 // create a blinky task
@@ -330,14 +344,14 @@ async fn main(spawner: Spawner) {
     let nw_stack_seed = (rng.random() as u64) << 32 | rng.random() as u64; // card shuffle random seed
     let tls_seed = (rng.random() as u64) << 32 | rng.random() as u64; // tls random seed
     let timg0 = TimerGroup::new(peripherals.TIMG0);
+
     // this init() was returning EspWifiController<'d> 
     // 'd (rng, timg0) which live only as long 
-    // let wifi_init = esp_wifi::init(timg0.timer0, rng).expect("WIFI/BLE controller");
-    
-    // embassy requires static lifetimes for tasks and resources even though main -> !
-    // wifi_controller: &'static EspWifiController<'static>
-    let wifi_controller = WIFI_CONTROLLER.init(esp_wifi::init(timg0.timer0, rng).unwrap());
-    let (wifi_controller, interfaces) = esp_wifi::wifi::new(wifi_controller, peripherals.WIFI)
+    let mut wifi_init = esp_wifi::init(timg0.timer0, rng).expect("WIFI/BLE controller");
+    // let wifi_init = make_static!(EspWifiController<'static>, esp_wifi::init(timg0.timer0, rng));
+    let wifi_ctrl = make_static_pico!(EspWifiController<'static>, wifi_init);
+
+    let (wifi_controller, interfaces) = esp_wifi::wifi::new(wifi_ctrl, peripherals.WIFI)
         .expect("Failed to initialize WIFI controller");
     
     // pull out a station client
@@ -362,18 +376,36 @@ async fn main(spawner: Spawner) {
     let mac = station.mac_address();
     debug!("station mac {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]); 
 
+
+
     // configure network stack
     let nw_config = embassy_net::Config::dhcpv4(DhcpConfig::default());
     let (stack,runner) = embassy_net::new(
         station,
         nw_config,
-        singleton!(StackResources::new()),
+        make_static_pico!(StackResources::<16>, StackResources::<16>::new()),
         nw_stack_seed
     );
-    let stack = STACK.init(stack);
+    
+    // let stack = make_static_pico!(Stack<'static>, stack_);
+
+    // let stack = STACK.init(stack);
 
     // led for blinky gpio21 
     let led: Output<'_> = esp_hal::gpio::Output::new(peripherals.GPIO21, Level::Low, OutputConfig::default());
+
+    let config = make_static_pico!(
+        picoserve::Config<Duration>,
+        picoserve::Config::new(picoserve::Timeouts {
+            start_read_request: Some(Duration::from_secs(5)),
+            persistent_start_read_request: Some(Duration::from_secs(1)),
+            read_request: Some(Duration::from_secs(1)),
+            write: Some(Duration::from_secs(1)),
+        })
+        .keep_connection_alive()
+    );
+
+    let app = make_static_pico!(AppRouter<AppProps>, AppProps.build_app());
 
     // TODO: Spawn some tasks
     let _ = spawner;
@@ -381,7 +413,11 @@ async fn main(spawner: Spawner) {
     spawner.spawn(blinky_task(led)).unwrap();
     spawner.spawn(connection(wifi_controller)).unwrap();
     spawner.spawn(stack_runner(runner)).unwrap();
-    spawner.spawn(ip_task(stack, tls_seed)).unwrap();
+    // // spawner.spawn(ip_task(stack, tls_seed)).unwrap();
+    for id in 0..WEB_TASK_POOL_SIZE {
+        spawner.spawn(web_task(id, stack, config, app));
+    }
+    
 
     // the tasks have a non-blocking loop
     // loop {

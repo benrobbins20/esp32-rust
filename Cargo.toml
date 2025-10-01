@@ -43,10 +43,11 @@ smoltcp = { version = "0.12.0", default-features = false, features = [
   "socket-tcp",
   "socket-udp",
 ] }
-static_cell = "2.1.1"
+static_cell = { version = "2.1.1", features = ["nightly"] }
 esp-println = { version = "0.15.0", features = ["esp32s3", "log-04"] }
 log = "0.4.28"
 reqwless = { version = "0.13.0", features = ["alloc", "log"] }
+picoserve = { version = "0.16.0", features = ["embassy"] }
 
 
 
