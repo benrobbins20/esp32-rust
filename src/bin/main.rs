@@ -10,6 +10,7 @@
 use core::str::from_utf8;
 
 use alloc::boxed::Box;
+use alloc::format;
 use alloc::vec::Vec;
 use embassy_executor::Spawner;
 use embassy_net::tcp::client::{TcpClient, TcpClientState};
@@ -17,6 +18,7 @@ use embassy_net::dns::DnsSocket;
 use embassy_net::{new, Config, DhcpConfig, Runner, Stack, StackResources};
 use embassy_time::{Delay, Duration, Instant, Timer};
 use esp_hal::gpio::{Level, OutputConfig};
+use esp_hal::system::AppCoreGuard;
 use esp_hal::{clock::CpuClock, gpio::Output};
 use esp_hal::timer::systimer::SystemTimer;
 use esp_hal::timer::timg::TimerGroup;
@@ -26,11 +28,12 @@ use esp_wifi::EspWifiController;
 use log::{info, debug, error};
 use esp_println::println;
 use esp_hal::rng::Rng;
-use picoserve::response::IntoResponse;
-use picoserve::routing::get;
+use picoserve::response::{IntoResponse, Response, StatusCode};
+use picoserve::routing::{get, PathRouter};
 use reqwless::client::{HttpClient, TlsConfig, TlsVerify};
 use reqwless::{request, response};
 use picoserve::io::Socket;
+use picoserve::extract::State;
 
 // use static_cell::{make_static, StaticCell};
 extern crate alloc;
@@ -42,8 +45,10 @@ use reqwless::request::Method::GET;
 use static_cell::{make_static, StaticCell};
 
 use picoserve::time::Timer as PicoTimer;
-use picoserve::{make_static as make_static_pico, Router};
+use picoserve::{make_static as make_static_pico, AppWithStateBuilder, Router};
 use picoserve::{AppBuilder, AppRouter};
+use core::sync::atomic::AtomicUsize;
+use alloc::string::String;
 
 
 
@@ -94,28 +99,89 @@ esp_bootloader_esp_idf::esp_app_desc!();
 //         }
 // }
 
-struct AppProps;
+// TaskRouter holds a message str to pass between 
+// struct TaskRouter {
+//     task_id: usize,
+// }
 
-impl AppBuilder for AppProps {
-    type PathRouter = impl picoserve::routing::PathRouter;
+// impl TaskRouter {
+//     fn new(task_id: usize) -> Self {
+//         Self { task_id}
+//     }
+// }
 
-    fn build_app(self) -> picoserve::Router<Self::PathRouter> {
-        picoserve::Router::new().route("/", get(|| async move { "Hello World" }))
-    }
+// impl AppBuilder for TaskRouter {
+//     type PathRouter = impl picoserve::routing::PathRouter;
+
+//     fn build_app(self) -> Router<Self::PathRouter> {
+//         let task_id = self.task_id;
+//         // let content = format!("Hello from task {}!", task_id);
+//         // let resp = Response::new(StatusCode::OK, content);
+//         Router::new()
+//             .route(
+//                 "/", 
+//                 get(move || async move {
+//                     let content = format!("Hello from task {}!", task_id);
+//                     Response::new(StatusCode::OK, content.as_str())
+//             }),
+//         )
+//     }
+// }
+
+// // try with state method
+// struct AppProps {
+//     service_name: &'static str,
+// }
+// // properties of the app, which a builder that can construct the task router/unique ID's
+// struct TaskState {
+//     state_request_count: AtomicUsize,
+// }
+
+// impl AppWithStateBuilder for AppProps {
+//     type State = TaskState;
+//     type PathRouter = impl picoserve::routing::PathRouter<TaskState>;
+    
+//     fn build_app(self) -> Router<Self::PathRouter> {
+//         let service_name = self.service_name;
+//         Router::new()
+//             .route(
+//                 "/", 
+//                 get(move |state: State<TaskState>| async move {
+//                     let count = state.request_count.fetch_add(1, core::sync::atomic::Ordering::SeqCst) + 1;
+//                     let content = format!("Hello from {}! This endpoint has been called {} times.", service_name, count);
+//                     Response::new(StatusCode::OK, content.as_str())
+//             }),
+//         )
+//     }
+    
+// }
+
+#[derive(Clone)]
+struct AppState {
+    task_id: usize,
 }
 
-const WEB_TASK_POOL_SIZE: usize = 1;
+const WEB_TASK_POOL_SIZE: usize = 2;
 
 // async fn handler() -> impl IntoResponse {
 //     "hello from picoserve!"
 // }
 
+// async fn handler(state: State<AppState>) -> impl IntoResponse {
+//     format!("Hello from task {}!", state.task_id).as_str()
+// }
+
+async fn handler(msg: &'static str) -> impl IntoResponse {
+    msg
+}
+
 #[embassy_executor::task(pool_size = WEB_TASK_POOL_SIZE)]
 async fn web_task(
     task_id: usize,
-    stack: embassy_net::Stack<'static>,
+    stack: &'static Stack<'static>,
     config: &'static picoserve::Config<Duration>,
-    app: &'static AppRouter<AppProps>
+    // app: &'static AppRouter<TaskRouter>
+    msg: &'static str,
 ) -> ! {
     let port = 80;
     let mut tcp_rx_buffer = [0; 1024];
@@ -148,19 +214,25 @@ async fn web_task(
         Timer::after(Duration::from_millis(500)).await;
     }
 
+    // let state = AppState { task_id };
+
+
     // let app = Router::new()
     //     .route("/", get(handler))
     // ;
+    info!("msg: {}", msg);
+    let app = Router::new().route("/", get(move || async move {msg}));
 
     picoserve::listen_and_serve(
         task_id,
-        app,
+        &app,
         config,
-        stack,
+        *stack,
         port,
         &mut tcp_rx_buffer,
         &mut tcp_tx_buffer,
         &mut http_buffer,
+
     )
     .await
     
@@ -406,17 +478,16 @@ async fn main(spawner: Spawner) {
 
     // configure network stack
     let nw_config = embassy_net::Config::dhcpv4(DhcpConfig::default());
-    let (stack,runner) = embassy_net::new(
+    let (stack_,runner) = embassy_net::new(
         station,
         nw_config,
-        make_static_pico!(StackResources::<16>, StackResources::<16>::new()),
+        make_static_pico!(StackResources::<10>, StackResources::<10>::new()),
         nw_stack_seed
     );
 
     
-    // let stack = make_static_pico!(Stack<'static>, stack_);
+    let stack = make_static_pico!(Stack<'static>, stack_);
 
-    // let stack = STACK.init(stack);
 
     // led for blinky gpio21 
     let led: Output<'_> = esp_hal::gpio::Output::new(peripherals.GPIO21, Level::Low, OutputConfig::default());
@@ -432,7 +503,7 @@ async fn main(spawner: Spawner) {
         .keep_connection_alive()
     );
 
-    let app = make_static_pico!(AppRouter<AppProps>, AppProps.build_app());
+    
 
     // TODO: Spawn some tasks
     let _ = spawner;
@@ -443,10 +514,20 @@ async fn main(spawner: Spawner) {
     
     // // spawner.spawn(ip_task(stack, tls_seed)).unwrap();
 
-    for id in 0..WEB_TASK_POOL_SIZE {
-        spawner.spawn(web_task(id, stack, config, app));
-    }
-    
+    // let app = make_static_pico!(AppRouter<TaskRouter>, TaskRouter::new(0).build_app());
+
+    // for id in 0..WEB_TASK_POOL_SIZE {
+    //     let s = make_static_pico!(String, format!("Hello from task id: {}", id));
+    //     let msg: &'static str = s.as_str();
+
+    //     spawner.must_spawn(web_task(id, stack, config, msg));
+    // }
+    let string1 = make_static_pico!(String, String::from("hello from task 0"));
+    let string2 = make_static_pico!(String, String::from("hello from task 1"));
+    let msg1: &'static str = string1.as_str();
+    let msg2: &'static str = string2.as_str();
+    spawner.must_spawn(web_task(0, stack, config, msg1));
+    spawner.must_spawn(web_task(1, stack, config, msg2));
 
     // the tasks have a non-blocking loop
     // loop {
