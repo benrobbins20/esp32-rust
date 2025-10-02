@@ -8,7 +8,7 @@
 #![feature(impl_trait_in_assoc_type)]
 
 use core::str::from_utf8;
-
+use alloc::format;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use embassy_executor::Spawner;
@@ -44,6 +44,8 @@ use static_cell::{make_static, StaticCell};
 use picoserve::time::Timer as PicoTimer;
 use picoserve::{make_static as make_static_pico, Router};
 use picoserve::{AppBuilder, AppRouter};
+use alloc::string::String;
+use picoserve::response::DebugValue;
 
 
 
@@ -94,17 +96,17 @@ esp_bootloader_esp_idf::esp_app_desc!();
 //         }
 // }
 
-struct AppProps;
+// struct AppProps;
 
-impl AppBuilder for AppProps {
-    type PathRouter = impl picoserve::routing::PathRouter;
+// impl AppBuilder for AppProps {
+//     type PathRouter = impl picoserve::routing::PathRouter;
 
-    fn build_app(self) -> picoserve::Router<Self::PathRouter> {
-        picoserve::Router::new().route("/", get(|| async move { "Hello World" }))
-    }
-}
+//     fn build_app(self) -> picoserve::Router<Self::PathRouter> {
+//         picoserve::Router::new().route("/", get(|| async move { "Hello World" }))
+//     }
+// }
 
-const WEB_TASK_POOL_SIZE: usize = 1;
+const WEB_TASK_POOL_SIZE: usize = 4;
 
 // async fn handler() -> impl IntoResponse {
 //     "hello from picoserve!"
@@ -115,7 +117,8 @@ async fn web_task(
     task_id: usize,
     stack: embassy_net::Stack<'static>,
     config: &'static picoserve::Config<Duration>,
-    app: &'static AppRouter<AppProps>
+    // app: &'static AppRouter<AppProps>,
+    msg: &'static str,
 ) -> ! {
     let port = 80;
     let mut tcp_rx_buffer = [0; 1024];
@@ -148,13 +151,13 @@ async fn web_task(
         Timer::after(Duration::from_millis(500)).await;
     }
 
-    // let app = Router::new()
-    //     .route("/", get(handler))
-    // ;
+    let app = Router::new()
+        .route("/", get(move || async move { msg }))
+    ;
 
     picoserve::listen_and_serve(
         task_id,
-        app,
+        &app,
         config,
         stack,
         port,
@@ -409,7 +412,7 @@ async fn main(spawner: Spawner) {
     let (stack,runner) = embassy_net::new(
         station,
         nw_config,
-        make_static_pico!(StackResources::<16>, StackResources::<16>::new()),
+        make_static_pico!(StackResources::<10>, StackResources::<10>::new()),
         nw_stack_seed
     );
 
@@ -432,7 +435,7 @@ async fn main(spawner: Spawner) {
         .keep_connection_alive()
     );
 
-    let app = make_static_pico!(AppRouter<AppProps>, AppProps.build_app());
+    // let app = make_static_pico!(AppRouter<AppProps>, AppProps.build_app());
 
     // TODO: Spawn some tasks
     let _ = spawner;
@@ -444,7 +447,10 @@ async fn main(spawner: Spawner) {
     // // spawner.spawn(ip_task(stack, tls_seed)).unwrap();
 
     for id in 0..WEB_TASK_POOL_SIZE {
-        spawner.spawn(web_task(id, stack, config, app));
+        // let s = make_static_pico!(String, format!("Hello from task {}", id));
+        // let msg: &'static str = s.as_str();
+        let msg: &'static str = Box::leak(format!("Hello from task {id}").into_boxed_str());
+        spawner.spawn(web_task(id, stack, config, msg));
     }
     
 
