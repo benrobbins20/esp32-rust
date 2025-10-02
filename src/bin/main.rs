@@ -8,6 +8,7 @@
 #![feature(impl_trait_in_assoc_type)]
 
 use core::str::from_utf8;
+use picoserve::routing::PathRouter;
 use alloc::format;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
@@ -31,24 +32,17 @@ use picoserve::routing::get;
 use reqwless::client::{HttpClient, TlsConfig, TlsVerify};
 use reqwless::{request, response};
 use picoserve::io::Socket;
-
-// use static_cell::{make_static, StaticCell};
-extern crate alloc;
 use esp_wifi::wifi::WifiEvent;
 use esp_wifi::wifi::Configuration as WifiConfiguration;
 use esp_wifi::wifi::AccessPointInfo;
 use reqwless::request::Method::GET;
-// use embedded_io_async::Read;
 use static_cell::{make_static, StaticCell};
-
 use picoserve::time::Timer as PicoTimer;
 use picoserve::{make_static as make_static_pico, Router};
 use picoserve::{AppBuilder, AppRouter};
 use alloc::string::String;
 use picoserve::response::DebugValue;
-
-
-
+extern crate alloc;
 
 const SSID: &str = env!("RUST_ESP32_STD_DEMO_WIFI_SSID");
 const PASS: &str = env!("RUST_ESP32_STD_DEMO_WIFI_PASS");
@@ -71,40 +65,20 @@ const HTTPS_URL: &str = "https://example.com/";
 // static stack
 // static STACK: StaticCell<embassy_net::Stack<'static>> = StaticCell::new();
 
-// no_std requires a panic handler, default to non-divergent (!) infinite loop 
 #[panic_handler]
-fn panic(_: &core::panic::PanicInfo) -> ! {
-    loop {}
-}
-
-// This creates a default app-descriptor required by the esp-idf bootloader.
-// For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
+fn panic(_: &core::panic::PanicInfo) -> ! {loop {}}
 esp_bootloader_esp_idf::esp_app_desc!();
 
-// struct EmbassyTimer;
+struct AppProps{msg: &'static str}
+impl AppBuilder for AppProps {
+    type PathRouter = impl picoserve::routing::PathRouter;
 
-// impl picoserve::Timer for EmbassyTimer {
-//     type Duration = embassy_time::Duration;
-//     type TimeoutError = embassy_time::TimeoutError;
+    fn build_app(self) -> Router<Self::PathRouter> {
+        Router::new()
+            .route("/", get(move || async move { self.msg }))
+    }
+}
 
-//     async fn run_with_timeout<F: core::future::Future>(
-//             &mut self,
-//             duration: Self::Duration,
-//             future: F,
-//         ) -> Result<F::Output, Self::TimeoutError> {
-//             embassy_time::with_timeout(duration, future).await
-//         }
-// }
-
-// struct AppProps;
-
-// impl AppBuilder for AppProps {
-//     type PathRouter = impl picoserve::routing::PathRouter;
-
-//     fn build_app(self) -> picoserve::Router<Self::PathRouter> {
-//         picoserve::Router::new().route("/", get(|| async move { "Hello World" }))
-//     }
-// }
 
 const WEB_TASK_POOL_SIZE: usize = 4;
 
@@ -117,10 +91,10 @@ async fn web_task(
     task_id: usize,
     stack: embassy_net::Stack<'static>,
     config: &'static picoserve::Config<Duration>,
-    // app: &'static AppRouter<AppProps>,
-    msg: &'static str,
+    app: &'static AppRouter<AppProps>,
+    // msg: &'static str,
 ) -> ! {
-    let port = 80;
+    let port = 80 + task_id as u16; // each task gets its own port
     let mut tcp_rx_buffer = [0; 1024];
     let mut tcp_tx_buffer = [0; 1024];
     let mut http_buffer = [0; 2048];
@@ -151,13 +125,14 @@ async fn web_task(
         Timer::after(Duration::from_millis(500)).await;
     }
 
-    let app = Router::new()
-        .route("/", get(move || async move { msg }))
-    ;
+    // let app = Router::new()
+    //     .route("/", get(move || async move { msg }))
+    // ;
 
+    info!("Starting picoserve on task {task_id}");
     picoserve::listen_and_serve(
         task_id,
-        &app,
+        app,
         config,
         stack,
         port,
@@ -446,19 +421,13 @@ async fn main(spawner: Spawner) {
     
     // // spawner.spawn(ip_task(stack, tls_seed)).unwrap();
 
+    // can just use alloc Box i guess, cant call make_static in a loop?
     for id in 0..WEB_TASK_POOL_SIZE {
-        // let s = make_static_pico!(String, format!("Hello from task {}", id));
-        // let msg: &'static str = s.as_str();
         let msg: &'static str = Box::leak(format!("Hello from task {id}").into_boxed_str());
-        spawner.spawn(web_task(id, stack, config, msg));
+        let app = AppProps{msg}.build_app();
+        let app = Box::leak(Box::new(app));
+        if let Err(e) = spawner.spawn(web_task(id, stack, config, app)) {
+            error!("Failed to spawn web_task: {:?}", e);
+        }
     }
-    
-
-    // the tasks have a non-blocking loop
-    // loop {
-    //     Timer::after(Duration::from_secs(1)).await;
-    // }
-
-    // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v1.0.0-rc.0/examples/src/bin
-    
 }
