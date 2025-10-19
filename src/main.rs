@@ -1,12 +1,11 @@
 use std::{default, time::Duration};
-use anyhow::Result;
-use esp_idf_svc::{eventloop::EspSystemEventLoop, hal::prelude::Peripherals};
-use esp_idf_hal::{delay::FreeRtos, rmt::{config::TransmitConfig, FixedLengthSignal, PinState, Pulse, PulseTicks, TxRmtDriver}};
+use anyhow::{bail, Result};
+use esp_idf_svc::{eventloop::EspSystemEventLoop, hal::prelude::Peripherals, wifi::{AuthMethod, BlockingWifi, ClientConfiguration, Configuration, EspWifi}};
+use esp_idf_hal::{delay::FreeRtos, peripheral::{self, Peripheral}, rmt::{config::TransmitConfig, FixedLengthSignal, PinState, Pulse, PulseTicks, TxRmtDriver}};
+use rgb::RGB8;
 
-// mod rgb;
-
-
-// // bring in secrets
+// bring in secrets
+// cfg.toml generates this struct as SHOUTY_SNAKE const
 #[toml_cfg::toml_config]
 pub struct WifiConfig {
     #[default("wifi_ssid")]
@@ -15,22 +14,12 @@ pub struct WifiConfig {
     wifi_password: &'static str
 }
 
-// fn u32_to_GRB(color: u32) -> (u8, u8, u8) {
-//     let green = (color & 0xFF0000);
-//     let red = (color & 0x00FF00);
-//     let blue = (color & 0x0000FF);
-// }
-
 fn send_frame(color: u32, driver: &mut TxRmtDriver) -> Result<()> {
-    
-        // WS2812 is GRB
-        // let mut blue = 0u32;
-        // let mut green = 0u32;
-        // let mut red = 0u32;
-        // let color:u32 = (green << 16) | (red << 8) | blue;
+
         log::info!("Sending color: {:06X}", color);
     
-        // you send a 24 bit packet to WS2812 with each `send` being a pair of high and low pulses
+        // you send a 24 bit packet to WS2812 with each bit being set in fixed length buffer
+        // each bit is sent as a pair of high/low pulses in a pre-defined interval
         /* From the datasheet
         T0H 0 code ,high voltage time 0.4us ±150ns 
         T1H 1 code ,high voltage time 0.8us ±150ns
@@ -71,6 +60,69 @@ fn send_frame(color: u32, driver: &mut TxRmtDriver) -> Result<()> {
     Ok(())
 }
 
+fn idf_wifi(
+    ssid: &str,
+    password: &str,
+    modem: impl peripheral::Peripheral<P = esp_idf_hal::modem::Modem> + 'static,
+    sysloop: EspSystemEventLoop
+) -> Result<Box<EspWifi<'static>>> {
+    let mut auth_method = AuthMethod::WPA2Personal;
+
+    if ssid.is_empty() {
+        bail!("ssid not found")
+    }
+    if password.is_empty() {
+        bail!("password not found")
+    }
+
+    // ASYNC wifi instance
+    let mut esp_wifi = EspWifi::new(modem, sysloop.clone(), None).unwrap();
+    // wrap in blocking connect so you don't need to poll/await until connected
+    let mut wifi = BlockingWifi::wrap(&mut esp_wifi, sysloop).unwrap();
+    wifi.set_configuration(&Configuration::Client(esp_idf_svc::wifi::ClientConfiguration::default())).unwrap(); // check the defaults
+
+    log::info!("starting wifi...");
+    wifi.start().unwrap();
+
+    log::info!("scanning for ap's");
+    let ap_list = wifi.scan().unwrap();
+
+    // scan returns a vector of ap info structs, iterate through and match the ssid
+    let ap = ap_list.into_iter().find(|found_ap| found_ap.ssid == ssid);
+
+    // assign the channel after reading broadcasted ap info
+    let channel = if let Some(ap) = ap {
+        log::info!("found ap {:?}, channel {}", ssid, ap.channel);
+        Some(ap.channel)
+    }
+    else {
+        log::error!("could not find ap {}", ssid);
+        None
+    };
+
+    wifi.set_configuration(&Configuration::Client(ClientConfiguration {
+        ssid: ssid
+            .try_into()
+            .expect("failed parsing ssid"),
+        password: password
+            .try_into()
+            .expect("failed to parse password"),
+        channel,
+        auth_method,
+        ..Default::default() // will assign the remaining parameters as default
+    })).unwrap();
+
+    // connect and get an IP address
+    log::info!("connecting to {}", ssid);
+    wifi.connect().unwrap();
+    wifi.wait_netif_up().unwrap();
+    let ip_info = wifi.wifi().sta_netif().get_ip_info().unwrap();
+    log::info!("DHCP info {:?}", ip_info);
+
+    // return the async instance of EspWifi after using the wrapped instance to connect
+    Ok(Box::new(esp_wifi))
+}
+
 fn main() -> Result<()> {   
     esp_idf_svc::sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
@@ -78,8 +130,7 @@ fn main() -> Result<()> {
     let p = Peripherals::take().unwrap();
     let sysloop = EspSystemEventLoop::take().unwrap();
 
-    // manual RMT setup
-    // let freq = Rate
+    // addressable WS2812 LED setup via RMT
     let pin = p.pins.gpio2;
     let channel = p.rmt.channel0;
     let mut tx = TxRmtDriver::new(
@@ -88,6 +139,14 @@ fn main() -> Result<()> {
         &TransmitConfig::new().clock_divider(2), // 160MHz / 2
     )?;
     
+    let wifi_config = WIFI_CONFIG;
+
+    let _wifi = match idf_wifi(wifi_config.wifi_ssid, wifi_config.wifi_password, p.modem, sysloop){
+        Ok(inner) => inner,
+        Err(err) =>{
+            bail!("Wifi connect failed")
+        }
+    };
 
     log::info!("Hello, world!");
     loop{
