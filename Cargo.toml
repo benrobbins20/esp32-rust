@@ -30,6 +30,7 @@ anyhow = "1.0.100"
 esp-idf-hal = { version = "0.45.2", features = ["rmt-legacy"] }
 rgb = "0.8.52"
 embedded-svc = "0.28.1"
+shtcx = "1.0.0"
 
 # --- Optional Embassy Integration ---
 # esp-idf-svc = { version = "0.51", features = ["critical-section", "embassy-time-driver", "embassy-sync"] }

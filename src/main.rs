@@ -1,10 +1,14 @@
-use std::{default, time::Duration};
-use anyhow::{bail, Result};
-use esp_idf_svc::{eventloop::EspSystemEventLoop, hal::prelude::Peripherals, http::{client::EspHttpConnection}, wifi::{AuthMethod, BlockingWifi, ClientConfiguration, Configuration, EspWifi}};
-use esp_idf_hal::{delay::FreeRtos, io::Read, peripheral::{self, Peripheral}, rmt::{config::TransmitConfig, FixedLengthSignal, PinState, Pulse, PulseTicks, TxRmtDriver}};
+use std::{default, sync::{Arc, Mutex}, time::Duration};
+use anyhow::{Result, bail};
+use esp_idf_svc::{eventloop::EspSystemEventLoop, hal::prelude::Peripherals, http::{client::EspHttpConnection, server::EspHttpServer}, wifi::{AuthMethod, BlockingWifi, ClientConfiguration, Configuration, EspWifi}};
+use esp_idf_hal::{delay::FreeRtos, gpio::Pins, i2c::{I2C0, I2cConfig, I2cDriver}, io::{EspIOError, Read}, peripheral::{self, Peripheral}, prelude::*, rmt::{FixedLengthSignal, PinState, Pulse, PulseTicks, TxRmtDriver, config::TransmitConfig}, units::Hertz};
 use rgb::RGB8;
 use embedded_svc::http::client::Client;
 use embedded_svc::http::Method;
+use embedded_svc::wifi::Configuration as WifiConfiguration;
+use esp_idf_svc::http::server::Configuration as HttpConfiguration;
+use shtcx::{ShtCx, sensor_class::Sht2Gen, shtc3};
+
 
 // bring in secrets
 // cfg.toml generates this struct as SHOUTY_SNAKE const
@@ -14,6 +18,26 @@ pub struct WifiConfig {
     wifi_ssid: &'static str,
     #[default("test")]
     wifi_password: &'static str
+}
+
+// struct for i2c
+struct I2CDev {
+    sda: esp_idf_hal::gpio::Gpio10,
+    scl: esp_idf_hal::gpio::Gpio8,
+    i2c: esp_idf_hal::i2c::I2C0
+}
+impl I2CDev {
+    fn new(
+        sda: esp_idf_hal::gpio::Gpio10,
+        scl: esp_idf_hal::gpio::Gpio8,
+        i2c: esp_idf_hal::i2c::I2C0
+    ) -> Self {
+        I2CDev {
+            sda,
+            scl,
+            i2c
+        }
+    }
 }
 
 fn send_frame(color: u32, driver: &mut TxRmtDriver) -> Result<()> {
@@ -68,82 +92,80 @@ fn idf_wifi(
     password: &str,
     modem: impl peripheral::Peripheral<P = esp_idf_hal::modem::Modem> + 'static,
     sysloop: EspSystemEventLoop
-) -> Result<Box<EspWifi<'static>>> {
-    let mut auth_method = AuthMethod::WPA2Personal;
+    ) -> Result<Box<EspWifi<'static>>> {
+        let mut auth_method = AuthMethod::WPA2Personal;
 
-    // if ssid.is_empty() {
-    //     bail!("ssid not found")
-    // }
-    // if password.is_empty() {
-    //     bail!("password not found")
-    // }
+        if ssid.is_empty() {
+            bail!("ssid not found")
+        }
+        if password.is_empty() {
+            bail!("password not found")
+        }
 
-    // ASYNC wifi instance
-    let mut esp_wifi = EspWifi::new(modem, sysloop.clone(), None).unwrap();
-    // wrap in blocking connect so you don't need to poll/await until connected
-    let mut wifi = BlockingWifi::wrap(&mut esp_wifi, sysloop).unwrap();
-    wifi.set_configuration(&Configuration::Client(esp_idf_svc::wifi::ClientConfiguration::default())).unwrap(); // check the defaults
+        // ASYNC wifi instance
+        let mut esp_wifi = EspWifi::new(modem, sysloop.clone(), None).unwrap();
+        // wrap in blocking connect so you don't need to poll/await until connected
+        let mut wifi = BlockingWifi::wrap(&mut esp_wifi, sysloop).unwrap();
+        wifi.set_configuration(&Configuration::Client(esp_idf_svc::wifi::ClientConfiguration::default())).unwrap(); // check the defaults
 
-    log::info!("starting wifi...");
-    wifi.start().unwrap();
+        log::info!("starting wifi...");
+        wifi.start().unwrap();
 
-    log::info!("scanning for ap's");
-    let ap_list = wifi.scan().unwrap();
+        log::info!("scanning for ap's");
+        let ap_list = wifi.scan().unwrap();
 
-    // print all ap's
-    for ap in &ap_list {
-        log::info!("found ap: ssid {:?}, channel {}, auth {:?}", ap.ssid, ap.channel, ap.auth_method);
-    }
+        // print all ap's
+        for ap in &ap_list {
+            log::info!("found ap: ssid {:?}, channel {}, auth {:?}, strength {}", ap.ssid, ap.channel, ap.auth_method, ap.signal_strength);
+        }
 
-    // scan returns a vector of ap info structs, iterate through and match the ssid
-    let ap = ap_list.into_iter().find(|found_ap| found_ap.ssid == ssid);
+        // scan returns a vector of ap info structs, iterate through and match the ssid
+        let ap = ap_list.into_iter().find(|found_ap| found_ap.ssid == ssid);
 
-    // assign the channel after reading broadcasted ap info
-    let channel = if let Some(ap) = ap {
-        log::info!("found ap {:?}, channel {}", ssid, ap.channel);
-        Some(ap.channel)
-    }
-    else {
-        log::error!("could not find ap {}", ssid);
-        None
-    };
+        // assign the channel after reading broadcasted ap info
+        let channel = if let Some(ap) = ap {
+            log::info!("found ap {:?}, channel {}", ssid, ap.channel);
+            Some(ap.channel)
+        }
+        else {
+            log::error!("could not find ap {}", ssid);
+            None
+        };
 
-    wifi.set_configuration(&Configuration::Client(ClientConfiguration {
-        ssid: ssid
-            .try_into()
-            .expect("failed parsing ssid"),
-        password: password
-            .try_into()
-            .expect("failed to parse password"),
-        channel,
-        auth_method,
-        ..Default::default() // will assign the remaining parameters as default
-    })).unwrap();
+        wifi.set_configuration(&Configuration::Client(ClientConfiguration {
+            ssid: ssid
+                .try_into()
+                .expect("failed parsing ssid"),
+            password: password
+                .try_into()
+                .expect("failed to parse password"),
+            channel,
+            auth_method,
+            ..Default::default() // will assign the remaining parameters as default
+        })).unwrap();
 
-    // connect and get an IP address
-    log::info!("connecting to {}", ssid);
-    wifi.connect().unwrap();
-    wifi.wait_netif_up().unwrap();
-    let ip_info = wifi.wifi().sta_netif().get_ip_info().unwrap();
-    log::info!("DHCP info {:?}", ip_info);
+        // connect and get an IP address
+        log::info!("connecting to {}", ssid);
+        wifi.connect().unwrap();
+        wifi.wait_netif_up().unwrap();
+        let ip_info = wifi.wifi().sta_netif().get_ip_info().unwrap();
+        log::info!("DHCP info {:?}", ip_info);
 
-    // return the async instance of EspWifi after using the wrapped instance to connect
-    Ok(Box::new(esp_wifi))
+        // return the async instance of EspWifi after using the wrapped instance to connect
+        Ok(Box::new(esp_wifi))
 }
-
 
 fn http_get(url: impl AsRef<str>) -> Result<()> {
     // load default EspWifiConnection
     let conn_cfg = esp_idf_svc::http::client::Configuration::default();
     let conn = EspHttpConnection::new(&conn_cfg)?;
-    
     let mut client = Client::wrap(conn);
 
     let headers = [("accept", "text/plain")];
     // create a request
     let req = client.request(Method::Get, url.as_ref(), &headers)?;
     // send request and store response
-    let resp = req.submit()?;
+    let mut resp = req.submit()?;
     let status = resp.status();
     log::info!("Response status: {}", status);
 
@@ -157,11 +179,12 @@ fn http_get(url: impl AsRef<str>) -> Result<()> {
             let mut offset = 0;
             // counter to determine len
             let mut total = 0;
-            let mut reader = resp;
+            // let mut reader = resp;
 
+            // 
             loop {
                 // read up to a 512 byte chunk, read -> Result<usize> = size
-                if let Ok(size) = Read::read(&mut reader, &mut buf[offset..]) {
+                if let Ok(size) = Read::read(&mut resp, &mut buf[offset..]) {
                     // response empty or data exhausted
                     if size == 0 {
                         break;
@@ -202,11 +225,18 @@ fn http_get(url: impl AsRef<str>) -> Result<()> {
             bail!("HTTP request failed: {}", status),
     }
 
-
-
     Ok(())
 }
 
+fn configure_i2c(dev: I2CDev) -> Arc<std::sync::Mutex<ShtCx<Sht2Gen, I2cDriver<'static>>>> {
+    let config = I2cConfig::new()
+        .baudrate(100.kHz().into());
+    
+    // return driver 
+    let i2c = I2cDriver::new(dev.i2c, dev.sda, dev.scl, &config).unwrap();
+    let i2c = Arc::new(Mutex::new(shtc3(i2c)));
+    i2c
+}
 
 fn main() -> Result<()> {   
     esp_idf_svc::sys::link_patches();
@@ -214,9 +244,20 @@ fn main() -> Result<()> {
 
     let p = Peripherals::take().unwrap();
     let sysloop = EspSystemEventLoop::take().unwrap();
+    let pins = p.pins;
+    let i2c = p.i2c0;
+
+    let i2cdev = I2CDev::new(pins.gpio10, pins.gpio8, i2c);
+    let temp = configure_i2c(i2cdev);
+    let ts = temp.clone();
+    ts
+        .lock()
+        .unwrap()
+        .start_measurement(shtcx::PowerMode::NormalMode)
+        .unwrap();
 
     // addressable WS2812 LED setup via RMT
-    let pin = p.pins.gpio2;
+    let pin = pins.gpio2;
     let channel = p.rmt.channel0;
     let mut tx = TxRmtDriver::new(
         channel,
@@ -235,7 +276,34 @@ fn main() -> Result<()> {
 
     http_get("http://neverssl.com/")?;
 
+    let mut server = EspHttpServer::new(&HttpConfiguration::default())?;
+    server.fn_handler("/", Method::Get, 
+    |req| -> core::result::Result<(), EspIOError> {
+        let mut resp = req.into_ok_response()?;
+        resp.write(index().as_bytes())?;
+        Ok(())
+    })?;
+
+    
+    server.fn_handler("/temperature", Method::Get, 
+    move |req| -> core::result::Result<(), EspIOError> {
+        let get_temp = ts
+            .lock()
+            .unwrap()
+            .get_measurement_result()
+            .unwrap()
+            .temperature
+            .as_degrees_celsius();
+
+        
+        let html = temperature(get_temp.to_string());
+        let mut resp = req.into_ok_response()?;
+        resp.write(html.as_bytes())?;
+        Ok(())
+    })?;
+
     log::info!("Hello, world!");
+
     loop{
         // create shifted 24 bit RGB values
         let green = (0xFF) << 16 | 0x00 << 8 | 0x00;
@@ -250,4 +318,30 @@ fn main() -> Result<()> {
         send_frame(blue, &mut tx)?;
         FreeRtos::delay_ms(1000);
     }
+}
+
+fn html_template(content: String) -> String {
+    format!(
+        "<!DOCTYPE html>
+        <html>
+            <head>
+                <title>ESP32-RS SHTC3 Sensor</title>
+            </head>
+            <body>
+                <h1>ESP32-RS SHTC3 Sensor Data</h1>
+                <p>Temperature and Humidity data will be displayed here.</p>
+                <div>{}</div>
+            </body>
+        </html>",
+        content
+    )
+}
+
+
+fn temperature(content: String) -> String {
+    html_template(format!("temp: {}", content))
+}
+
+fn index() -> String {
+    html_template("hello from ESP32".to_string())
 }
