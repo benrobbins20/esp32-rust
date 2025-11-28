@@ -249,7 +249,7 @@ fn main() -> Result<()> {
 
     let i2cdev = I2CDev::new(pins.gpio10, pins.gpio8, i2c);
     let temp = configure_i2c(i2cdev);
-    let ts = temp.clone();
+    let mut ts = temp.clone();
     ts
         .lock()
         .unwrap()
@@ -274,7 +274,7 @@ fn main() -> Result<()> {
         }
     };
 
-    http_get("http://neverssl.com/")?;
+    // http_get("http://neverssl.com/")?;
 
     let mut server = EspHttpServer::new(&HttpConfiguration::default())?;
     server.fn_handler("/", Method::Get, 
@@ -287,7 +287,8 @@ fn main() -> Result<()> {
     
     server.fn_handler("/temperature", Method::Get, 
     move |req| -> core::result::Result<(), EspIOError> {
-        let get_temp = ts
+        // let ts = temp.clone();
+        let temp = ts
             .lock()
             .unwrap()
             .get_measurement_result()
@@ -295,27 +296,33 @@ fn main() -> Result<()> {
             .temperature
             .as_degrees_celsius();
 
-        
-        let html = temperature(get_temp.to_string());
+        log::info!("Temperature: {} °C", temp);
+        let html = temperature(temp.to_string());
         let mut resp = req.into_ok_response()?;
         resp.write(html.as_bytes())?;
         Ok(())
     })?;
 
-    log::info!("Hello, world!");
+    // log::info!("");
 
     loop{
-        // create shifted 24 bit RGB values
-        let green = (0xFF) << 16 | 0x00 << 8 | 0x00;
-        let red = 0x00 << 16 | (0xFF) << 8 | 0x00;
-        let blue = 0x00 << 16 | 0x00 << 8 | (0xFF);
+        // // create shifted 24 bit RGB values
+        // let green = (0xFF) << 16 | 0x00 << 8 | 0x00;
+        // let red = 0x00 << 16 | (0xFF) << 8 | 0x00;
+        // let blue = 0x00 << 16 | 0x00 << 8 | (0xFF);
 
-        // send the colors, RMT needs a minimum ~80us delay between frames for latching
-        send_frame(green, &mut tx)?;
-        FreeRtos::delay_ms(1000);
-        send_frame(red, &mut tx)?;
-        FreeRtos::delay_ms(1000);
-        send_frame(blue, &mut tx)?;
+        // // send the colors, RMT needs a minimum ~80us delay between frames for latching
+        // send_frame(green, &mut tx)?;
+        // FreeRtos::delay_ms(1000);
+        // send_frame(red, &mut tx)?;
+        // FreeRtos::delay_ms(1000);
+        // send_frame(blue, &mut tx)?;
+        // FreeRtos::delay_ms(1000);
+        temp
+            .lock()
+            .unwrap()
+            .start_measurement(shtcx::PowerMode::NormalMode)
+            .unwrap();
         FreeRtos::delay_ms(1000);
     }
 }
