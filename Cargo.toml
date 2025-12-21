@@ -31,6 +31,9 @@ esp-idf-hal = { version = "0.45.2", features = ["rmt-legacy"] }
 rgb = "0.8.52"
 embedded-svc = "0.28.1"
 shtcx = "1.0.0"
+uuid = { version = "1.0", features = ["v4", "serde", "getrandom"] }
+heapless = "0.7"
+# heapless = "=0.7.16"
 
 # --- Optional Embassy Integration ---
 # esp-idf-svc = { version = "0.51", features = ["critical-section", "embassy-time-driver", "embassy-sync"] }
