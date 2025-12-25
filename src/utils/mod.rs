@@ -1,4 +1,4 @@
 // re-export utilities
-pub mod esp_wifi;
-// pub mod i2c;
+pub mod wifi;
+pub mod http;
 // pub mod 

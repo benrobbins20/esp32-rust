@@ -12,7 +12,8 @@ use uuid::Uuid;
 use uuid;
 
 mod utils; 
-use utils::esp_wifi::WifiManager;
+use utils::wifi::WifiManager;
+use utils::http::HttpConn;
 
 
 
@@ -94,81 +95,7 @@ fn send_frame(color: u32, driver: &mut TxRmtDriver) -> Result<()> {
     Ok(())
 }
 
-// 
 
-
-fn http_get(url: impl AsRef<str>) -> Result<()> {
-    // load default EspWifiConnection
-    let conn_cfg = esp_idf_svc::http::client::Configuration::default();
-    let conn = EspHttpConnection::new(&conn_cfg)?;
-    let mut client = Client::wrap(conn);
-
-    let headers = [("accept", "text/plain")];
-    // create a request
-    let req = client.request(Method::Get, url.as_ref(), &headers)?;
-    // send request and store response
-    let mut resp = req.submit()?;
-    let status = resp.status();
-    log::info!("Response status: {}", status);
-
-    // match/map the status code to a behavior
-    match status {
-        // success status codes
-        200..=299 => {
-            // buffer for recv chunks
-            let mut buf = [0u8; 512];
-            // offset to track which 8 byte `buffer address` to write to 
-            let mut offset = 0;
-            // counter to determine len
-            let mut total = 0;
-            // let mut reader = resp;
-
-            // 
-            loop {
-                // read up to a 512 byte chunk, read -> Result<usize> = size
-                if let Ok(size) = Read::read(&mut resp, &mut buf[offset..]) {
-                    // response empty or data exhausted
-                    if size == 0 {
-                        break;
-                    }
-                    total += size; // add the chunk to total
-                    let size_plus_offset = size + offset;
-                    // try to convert all the bytes in the chunk up to whatever is in the chunk
-                    match str::from_utf8(&buf[..size_plus_offset]) {
-                        Ok(text) => {
-                            log::info!("Received chunk: {}", text);
-                            // reset offset
-                            offset = 0;
-                        }
-
-                        // error if from_utf8 fails, attempt to reconstruct the data
-                        Err(e) => {
-                            // create a boundary between where data is readable and not, SURPRINGSLY EASY
-                            let valid_to = e.valid_up_to();
-                            // unchecked method is unsafe but should all be printable chars
-                            unsafe {
-                                print!("{}", str::from_utf8_unchecked(&buf[..valid_to]));
-                            }
-                            // copy the remaining invalid data to the beginning of the buffer
-                            buf.copy_within(valid_to.., 0);
-                            // set the offset to after the size of the invalid data and continue reading
-                            offset = size_plus_offset - valid_to;
-                        }
-                    }
-                }
-            }
-
-            log::info!("Total bytes received: {}", total);
-
-
-        }
-        // anything else _ => bail
-        _ => 
-            bail!("HTTP request failed: {}", status),
-    }
-
-    Ok(())
-}
 
 fn configure_i2c(dev: I2CDev) -> Arc<std::sync::Mutex<ShtCx<Sht2Gen, I2cDriver<'static>>>> {
     let config = I2cConfig::new()
@@ -207,23 +134,19 @@ fn main() -> Result<()> {
         &TransmitConfig::new().clock_divider(2), // 160MHz / 2
     )?;
     
+    // pull fields from toml
     let wifi_config = WIFI_CONFIG;
-
-    // let _wifi = match idf_wifi(wifi_config.wifi_ssid, wifi_config.wifi_password, p.modem, sysloop){
-    //     Ok(inner) => inner,
-    //     Err(err) =>{
-    //         bail!("Wifi connect failed, err: {}", err);
-    //     }
-    // };
-
     let mut wifi = WifiManager::new(
         wifi_config.wifi_ssid, 
         wifi_config.wifi_password, 
         p.modem, 
-        sysloop)?;
-
-    wifi.set_channel();
+        sysloop.clone())?;
+        
     wifi.connect()?;
+
+    let mut http_conn = HttpConn::new()?;
+    http_conn.http_get("http://neverssl.com")?;
+    // http_get("http://info.cern.ch/")?;
 
 
     let uuid = Uuid::new_v4().to_string();
