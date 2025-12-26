@@ -1,7 +1,7 @@
 use std::{default, sync::{Arc, Mutex}, time::Duration};
 use anyhow::{Result, bail};
 use esp_idf_svc::{eventloop::EspSystemEventLoop, hal::prelude::Peripherals, http::{client::EspHttpConnection, server::EspHttpServer}, mqtt::client::MqttClientConfiguration, wifi::{AuthMethod, BlockingWifi, ClientConfiguration, Configuration, EspWifi}};
-use esp_idf_hal::{delay::FreeRtos, gpio::Pins, i2c::{I2C0, I2cConfig, I2cDriver}, io::{EspIOError, Read}, peripheral::{self, Peripheral}, prelude::*, rmt::{FixedLengthSignal, PinState, Pulse, PulseTicks, TxRmtDriver, config::TransmitConfig}, units::Hertz};
+use esp_idf_hal::{delay::{self, Delay, FreeRtos}, gpio::Pins, i2c::{I2C0, I2cConfig, I2cDriver}, io::{EspIOError, Read}, peripheral::{self, Peripheral}, prelude::*, rmt::{FixedLengthSignal, PinState, Pulse, PulseTicks, TxRmtDriver, config::TransmitConfig}, units::Hertz};
 use rgb::RGB8;
 use embedded_svc::http::client::Client;
 use embedded_svc::http::Method;
@@ -89,14 +89,15 @@ fn main() -> Result<()> {
     wifi.connect()?;
 
     let i2cdev = I2CDev::new(pins.gpio10, pins.gpio8, i2c);
-    let temp = configure_i2c(i2cdev);
-    let mut ts = temp.clone();
+    let ts_main = configure_i2c(i2cdev);
+    let ts = ts_main.clone();
 
-    // ts
-    //     .lock()
-    //     .unwrap()
-    //     .start_measurement(shtcx::PowerMode::NormalMode)
-    //     .unwrap();
+    // start i2c
+    ts
+        .lock()
+        .unwrap()
+        .start_measurement(shtcx::PowerMode::NormalMode)
+        .unwrap();
 
     // addressable WS2812 LED setup via RMT
     let mut driver = RMTDriver::new(
@@ -140,18 +141,33 @@ fn main() -> Result<()> {
     let mut mqtt_client = esp_idf_svc::mqtt::client::EspMqttClient::new_cb(
         &broker_url,
         &mqtt_cfg,
+        move |_msg| {
+            //
+        },
     )?;
+
+    // empty payload
+    let payload: &[u8] = &[];
+    mqtt_client.enqueue(
+        format!("{}/hello", uuid).as_str(), 
+        esp_idf_svc::mqtt::client::QoS::AtLeastOnce, 
+        true, 
+        &payload)?;
+
 
 
 
 
     loop{
+        // this keeps i2c locked
+        let temp = ts_main
+            .lock()
+            .unwrap()
+            .measure_temperature(shtcx::PowerMode::NormalMode, &mut FreeRtos)
+            .unwrap()
+            .as_degrees_celsius();
 
-        // temp
-        //     .lock()
-        //     .unwrap()
-        //     .start_measurement(shtcx::PowerMode::NormalMode)
-        //     .unwrap();
+        log::info!("Temperature: {:?} °C Bytes: {:?}", temp, &temp.to_be_bytes());
         FreeRtos::delay_ms(1000);
     }
 }
