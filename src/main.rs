@@ -14,17 +14,23 @@ use uuid;
 mod utils; 
 use utils::wifi::WifiManager;
 use utils::http::HttpConn;
+use utils::rgb::RMTDriver;
 
-
-
+use crate::utils::rgb::Color;
 // bring in secrets
 // cfg.toml generates this struct as SHOUTY_SNAKE const
 #[toml_cfg::toml_config]
-pub struct WifiConfig {
+pub struct Config {
     #[default("test")]
     wifi_ssid: &'static str,
     #[default("test")]
-    wifi_password: &'static str
+    wifi_password: &'static str,
+    #[default("test.mosquitto.org")]
+    mqtt_broker: &'static str,
+    #[default("bob")]
+    mqtt_user: &'static str,
+    #[default("bob")]
+    mqtt_pass: &'static str
 }
 
 // const UUID: &'static str = get_uuid::uuid();
@@ -49,53 +55,6 @@ impl I2CDev {
     }
 }
 
-fn send_frame(color: u32, driver: &mut TxRmtDriver) -> Result<()> {
-
-        log::info!("Sending color: {:06X}", color);
-    
-        // you send a 24 bit packet to WS2812 with each bit being set in fixed length buffer
-        // each bit is sent as a pair of high/low pulses in a pre-defined interval
-        /* From the datasheet
-        T0H 0 code ,high voltage time 0.4us ±150ns 
-        T1H 1 code ,high voltage time 0.8us ±150ns
-        T0L 0 code , low voltage time 0.85us ±150ns
-        T1L 1 code ,low voltage time 0.45us ±150ns
-        */
-        // use the ticks per second of the RMT driver
-        let ticks_hz = driver.counter_clock()?;
-        // not sure why it needs to be a reference
-        let T0H = Pulse::new_with_duration(ticks_hz, PinState::High, &Duration::from_nanos(400))?;
-        let T1H = Pulse::new_with_duration(ticks_hz, PinState::High, &Duration::from_nanos(800))?;
-        let T0L = Pulse::new_with_duration(ticks_hz, PinState::Low, &Duration::from_nanos(850))?;
-        let T1L = Pulse::new_with_duration(ticks_hz, PinState::Low, &Duration::from_nanos(450))?;
-    
-        // create fixed length signal of 24 bits, 8 bits per color, to send WS2812
-        let mut signal = FixedLengthSignal::<24>::new();
-
-
-    // loop through each bit and send the pulse sequence
-    // MSB first
-    for i in (0..24).rev() {
-        // bit mask for the current color bit
-        let bit_mask = 2u32.pow(i);
-        // bit boolean, true if 1, false if 0
-        let bit_bool = (color & bit_mask) != 0; 
-        // create tuple pairs for both conditions
-        let (high, low) = if bit_bool {
-            (T1H, T1L)
-        }
-        else {
-            (T0H, T0L)
-        };
-        // set the signal per bit, decrementing size
-        signal.set(23 - i as usize, &(high, low))?;
-    }
-    driver.start_blocking(&signal)?;
-
-    Ok(())
-}
-
-
 
 fn configure_i2c(dev: I2CDev) -> Arc<std::sync::Mutex<ShtCx<Sht2Gen, I2cDriver<'static>>>> {
     let config = I2cConfig::new()
@@ -116,9 +75,23 @@ fn main() -> Result<()> {
     let pins = p.pins;
     let i2c = p.i2c0;
 
+    // toml config
+    let config = CONFIG;
+
+
+ 
+    let mut wifi = WifiManager::new(
+        config.wifi_ssid, 
+        config.wifi_password, 
+        p.modem, 
+        sysloop.clone())?;
+            
+    wifi.connect()?;
+
     let i2cdev = I2CDev::new(pins.gpio10, pins.gpio8, i2c);
     let temp = configure_i2c(i2cdev);
     let mut ts = temp.clone();
+
     // ts
     //     .lock()
     //     .unwrap()
@@ -126,26 +99,27 @@ fn main() -> Result<()> {
     //     .unwrap();
 
     // addressable WS2812 LED setup via RMT
-    let pin = pins.gpio2;
-    let channel = p.rmt.channel0;
-    let tx = TxRmtDriver::new(
-        channel,
-        pin,
-        &TransmitConfig::new().clock_divider(2), // 160MHz / 2
+    let mut driver = RMTDriver::new(
+        p.rmt.channel0,
+        pins.gpio2,
     )?;
+    driver.clear()?;
     
-    // pull fields from toml
-    let wifi_config = WIFI_CONFIG;
-    let mut wifi = WifiManager::new(
-        wifi_config.wifi_ssid, 
-        wifi_config.wifi_password, 
-        p.modem, 
-        sysloop.clone())?;
-        
-    wifi.connect()?;
+    // GRB remember 
+    let green = Color::try_from("FF0000")?;
+    let red = Color::try_from("00FF00")?;
+    let blue = Color::try_from("0000FF")?;
 
-    let mut http_conn = HttpConn::new()?;
-    http_conn.http_get("http://neverssl.com")?;
+
+    driver.set_rgb(blue)?;
+    FreeRtos::delay_ms(1000);
+    driver.clear()?;
+    
+
+
+    // let mut http_conn = HttpConn::new()?;
+    // http_conn.http_get("http://darksouls.wikidot.com/")?; // bug, seems to lock up because its so large
+    // http_conn.http_get("http://neverssl.com")?;
     // http_get("http://info.cern.ch/")?;
 
 
@@ -153,20 +127,26 @@ fn main() -> Result<()> {
     log::info!("Device UUID: {}", uuid);
     let mqtt_cfg = MqttClientConfiguration::default();
 
+    // likely using test.mosquitto or other public broker, plain mqtt://<> url if no creds
+    let broker_url = if config.mqtt_user != "" {
+        format!(
+            "mqtt://{}:{}@{}",
+            config.mqtt_user, config.mqtt_pass, config.mqtt_broker
+        )
+    } else {
+        format!("mqtt://{}", config.mqtt_broker)
+    };
+
+    let mut mqtt_client = esp_idf_svc::mqtt::client::EspMqttClient::new_cb(
+        &broker_url,
+        &mqtt_cfg,
+    )?;
+
+
+
 
     loop{
-        // // create shifted 24 bit RGB values
-        // let green = (0xFF) << 16 | 0x00 << 8 | 0x00;
-        // let red = 0x00 << 16 | (0xFF) << 8 | 0x00;
-        // let blue = 0x00 << 16 | 0x00 << 8 | (0xFF);
 
-        // // send the colors, RMT needs a minimum ~80us delay between frames for latching
-        // send_frame(green, &mut tx)?;
-        // FreeRtos::delay_ms(1000);
-        // send_frame(red, &mut tx)?;
-        // FreeRtos::delay_ms(1000);
-        // send_frame(blue, &mut tx)?;
-        // FreeRtos::delay_ms(1000);
         // temp
         //     .lock()
         //     .unwrap()

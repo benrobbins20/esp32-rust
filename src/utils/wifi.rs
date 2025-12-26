@@ -55,8 +55,9 @@ impl WifiManager {
     pub fn connect(&mut self) -> Result<()> {
         // wrap the async wifi in blocking wifi
         let mut blocking_wifi = BlockingWifi::wrap(&mut *self.wifi, self.sysloop.clone()).unwrap();
-        blocking_wifi.start().unwrap(); // start the wifi driver
-                                        // begin loop that scans for the access point and sets the channel
+        blocking_wifi.start().unwrap();
+        
+        // begin loop that scans for the access point and sets the channel
         loop {
             // read access points into a vector owned by WifiManager
             self.aps = blocking_wifi.scan()?;

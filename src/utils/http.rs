@@ -2,27 +2,11 @@ use anyhow::{Result, bail};
 use embedded_svc::http::client::{Client};
 use esp_idf_hal::io::Read;
 use esp_idf_svc::http::{Method, client::{EspHttpConnection}};
-use esp_idf_svc::http::client::Response;
 
 // http connection structzpub struct HttpClient {
 pub struct HttpConn {
     conn: EspHttpConnection,
 }
-
-// trait Extract {
-//     type Target;
-
-//     fn extract(&mut self) -> &mut Self::Target;
-// }
-
-// impl Extract for Client<&mut EspHttpConnection> {
-//     type Target = EspHttpConnection;
-
-//     fn extract(&mut self) -> &mut Self::Target {
-//         self
-
-//     }
-// }
 
 impl HttpConn {
     pub fn new() -> Result<Self> {
@@ -45,7 +29,7 @@ impl HttpConn {
         let ct = resp_headers.header("Content-Type");
         log::info!("Content-Type: {:?}", ct);
 
-        
+        // 
         match status_code {
             200..=299 => {
                 log::info!("HTTP GET successful: {}", status_code);
@@ -61,7 +45,7 @@ impl HttpConn {
     // chunk response body
     fn read_body(reader: &mut impl Read) -> Result<()> {
             
-            let mut buf = [0u8; 512]; // buffer for recv chunks
+            let mut buf = [0u8; 1024]; // buffer for recv chunks
             let mut offset = 0; // offset for handling partial reads
             let mut total = 0; // total bytes read
 
@@ -69,10 +53,12 @@ impl HttpConn {
             loop {
                 // if Ok() perform read, silently ignore
                 if let Ok(size) = reader.read(&mut buf){
+
                     // response empty or data exhausted
                     if size == 0 {
                         break;
                     }
+
                     total += size;
                     let size_plus_offset = size + offset; // offset = 0 99.9999% of the time
 
@@ -103,7 +89,7 @@ impl HttpConn {
                     }
                 }
 
-                // 
+                // else?
             }
             log::info!("Total bytes received: {}", total);
         Ok(())
