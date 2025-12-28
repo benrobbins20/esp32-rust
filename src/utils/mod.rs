@@ -2,4 +2,4 @@
 pub mod wifi;
 pub mod http;
 pub mod rgb;
-// pub mod 
+pub mod i2c;

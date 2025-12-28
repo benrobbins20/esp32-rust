@@ -1,7 +1,7 @@
 use std::{default, sync::{Arc, Mutex}, time::Duration};
 use anyhow::{Result, bail};
 use esp_idf_svc::{eventloop::EspSystemEventLoop, hal::prelude::Peripherals, http::{client::EspHttpConnection, server::EspHttpServer}, mqtt::client::MqttClientConfiguration, wifi::{AuthMethod, BlockingWifi, ClientConfiguration, Configuration, EspWifi}};
-use esp_idf_hal::{delay::{self, Delay, FreeRtos}, gpio::Pins, i2c::{I2C0, I2cConfig, I2cDriver}, io::{EspIOError, Read}, peripheral::{self, Peripheral}, prelude::*, rmt::{FixedLengthSignal, PinState, Pulse, PulseTicks, TxRmtDriver, config::TransmitConfig}, units::Hertz};
+use esp_idf_hal::{delay::{self, Delay, FreeRtos}, gpio::{OutputPin, Pins}, i2c::{I2C0, I2cConfig, I2cDriver}, io::{EspIOError, Read}, peripheral::{self, Peripheral}, prelude::*, rmt::{FixedLengthSignal, PinState, Pulse, PulseTicks, TxRmtDriver, config::TransmitConfig}, units::Hertz};
 use rgb::RGB8;
 use embedded_svc::http::client::Client;
 use embedded_svc::http::Method;
@@ -11,10 +11,12 @@ use shtcx::{ShtCx, sensor_class::Sht2Gen, shtc3};
 use uuid::Uuid;
 use uuid;
 
+// bring in utils library
 mod utils; 
 use utils::wifi::WifiManager;
 use utils::http::HttpConn;
 use utils::rgb::RMTDriver;
+use utils::i2c::{I2CManager};
 
 use crate::utils::rgb::Color;
 // bring in secrets
@@ -33,64 +35,31 @@ pub struct Config {
     mqtt_pass: &'static str
 }
 
-// const UUID: &'static str = get_uuid::uuid();
-
-// struct for i2c
-struct I2CDev {
-    sda: esp_idf_hal::gpio::Gpio10,
-    scl: esp_idf_hal::gpio::Gpio8,
-    i2c: esp_idf_hal::i2c::I2C0
-}
-impl I2CDev {
-    fn new(
-        sda: esp_idf_hal::gpio::Gpio10,
-        scl: esp_idf_hal::gpio::Gpio8,
-        i2c: esp_idf_hal::i2c::I2C0
-    ) -> Self {
-        I2CDev {
-            sda,
-            scl,
-            i2c
-        }
-    }
-}
+// const UUID: String = Uuid::new_v4().to_string();
 
 
-fn configure_i2c(dev: I2CDev) -> Arc<std::sync::Mutex<ShtCx<Sht2Gen, I2cDriver<'static>>>> {
-    let config = I2cConfig::new()
-        .baudrate(100.kHz().into());
-    
-    // return driver 
-    let i2c = I2cDriver::new(dev.i2c, dev.sda, dev.scl, &config).unwrap();
-    let i2c = Arc::new(Mutex::new(shtc3(i2c)));
-    i2c
-}
 
 fn main() -> Result<()> {   
     esp_idf_svc::sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
 
-    let p = Peripherals::take().unwrap();
+    let peripherals = Peripherals::take().unwrap();
     let sysloop = EspSystemEventLoop::take().unwrap();
-    let pins = p.pins;
-    let i2c = p.i2c0;
+    let pins = peripherals.pins;
 
     // toml config
     let config = CONFIG;
 
-
- 
     let mut wifi = WifiManager::new(
         config.wifi_ssid, 
         config.wifi_password, 
-        p.modem, 
+        peripherals.modem, 
         sysloop.clone())?;
             
     wifi.connect()?;
 
-    let i2cdev = I2CDev::new(pins.gpio10, pins.gpio8, i2c);
-    let ts_main = configure_i2c(i2cdev);
-    let ts = ts_main.clone();
+    let i2c = I2CManager::new(pins.gpio10, pins.gpio8, peripherals.i2c0);
+    let ts = i2c.temp_sensor.clone();
 
     // start i2c
     ts
@@ -101,7 +70,7 @@ fn main() -> Result<()> {
 
     // addressable WS2812 LED setup via RMT
     let mut driver = RMTDriver::new(
-        p.rmt.channel0,
+        peripherals.rmt.channel0,
         pins.gpio2,
     )?;
     driver.clear()?;
@@ -156,18 +125,26 @@ fn main() -> Result<()> {
 
 
 
-
-
     loop{
         // this keeps i2c locked
-        let temp = ts_main
+        let temp = i2c.temp_sensor
             .lock()
             .unwrap()
             .measure_temperature(shtcx::PowerMode::NormalMode, &mut FreeRtos)
             .unwrap()
             .as_degrees_celsius();
-
+        // mqtt will send float as 'big endian network bytes'
         log::info!("Temperature: {:?} °C Bytes: {:?}", temp, &temp.to_be_bytes());
+        
+
+        // publish temperature to mqtt topic
+        mqtt_client.enqueue(
+            format!("test").as_str(),
+            esp_idf_svc::mqtt::client::QoS::AtLeastOnce,
+            false,
+            &temp.to_be_bytes(),
+        )?;
+
         FreeRtos::delay_ms(1000);
     }
 }
