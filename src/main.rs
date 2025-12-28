@@ -59,14 +59,14 @@ fn main() -> Result<()> {
     wifi.connect()?;
 
     let i2c = I2CManager::new(pins.gpio10, pins.gpio8, peripherals.i2c0);
-    let ts = i2c.temp_sensor.clone();
+    // let ts = i2c.temp_sensor.clone();
 
-    // start i2c
-    ts
-        .lock()
-        .unwrap()
-        .start_measurement(shtcx::PowerMode::NormalMode)
-        .unwrap();
+    // // start i2c
+    // ts
+    //     .lock()
+    //     .unwrap()
+    //     .start_measurement(shtcx::PowerMode::NormalMode)
+    //     .unwrap();
 
     // addressable WS2812 LED setup via RMT
     let mut driver = RMTDriver::new(
@@ -111,7 +111,7 @@ fn main() -> Result<()> {
         &broker_url,
         &mqtt_cfg,
         move |_msg| {
-            //
+            // closure body, no callback
         },
     )?;
 
@@ -123,8 +123,7 @@ fn main() -> Result<()> {
         true, 
         &payload)?;
 
-
-
+    // main loop    
     loop{
         // this keeps i2c locked
         let temp = i2c.temp_sensor

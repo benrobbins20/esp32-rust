@@ -8,7 +8,7 @@ use crate::utils::i2c;
 
 
 pub struct I2CManager {
-    // the main temp sensor, clonable, lockable
+    // the main temp sensor, cloneable, lockable
     pub temp_sensor: Arc<Mutex<ShtCx<Sht2Gen, I2cDriver<'static>>>>,
 }
 
