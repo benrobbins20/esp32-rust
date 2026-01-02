@@ -24,4 +24,6 @@ impl I2CManager {
         let temp_sensor = Arc::new(Mutex::new(shtcx::shtc3(i2c)));
         Self { temp_sensor }
     }
+
+    // pub fn 
 }

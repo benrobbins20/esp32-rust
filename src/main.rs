@@ -1,7 +1,7 @@
 use std::{default, sync::{Arc, Mutex}, time::Duration};
-use anyhow::{Result, bail};
+use anyhow::{Ok, Result, bail};
 use esp_idf_svc::{eventloop::EspSystemEventLoop, hal::prelude::Peripherals, http::{client::EspHttpConnection, server::EspHttpServer}, mqtt::client::MqttClientConfiguration, wifi::{AuthMethod, BlockingWifi, ClientConfiguration, Configuration, EspWifi}};
-use esp_idf_hal::{delay::{self, Delay, FreeRtos}, gpio::{OutputPin, Pins}, i2c::{I2C0, I2cConfig, I2cDriver}, io::{EspIOError, Read}, peripheral::{self, Peripheral}, prelude::*, rmt::{FixedLengthSignal, PinState, Pulse, PulseTicks, TxRmtDriver, config::TransmitConfig}, units::Hertz};
+use esp_idf_hal::{delay::{self, Delay, FreeRtos}, gpio::{OutputPin, Pins}, i2c::{I2C0, I2cConfig, I2cDriver}, io::{EspIOError, Read}, peripheral::{self, Peripheral}, prelude::*, rmt::{FixedLengthSignal, PinState, Pulse, PulseTicks, TxRmtDriver, config::TransmitConfig}, spi::{Spi, SpiConfig}, units::Hertz};
 use rgb::RGB8;
 use embedded_svc::http::client::Client;
 use embedded_svc::http::Method;
@@ -56,7 +56,7 @@ fn main() -> Result<()> {
         peripherals.modem, 
         sysloop.clone())?;
             
-    wifi.connect()?;
+    // wifi.connect()?;
 
     let i2c = I2CManager::new(pins.gpio10, pins.gpio8, peripherals.i2c0);
     // let ts = i2c.temp_sensor.clone();
@@ -81,9 +81,9 @@ fn main() -> Result<()> {
     let blue = Color::try_from("0000FF")?;
 
 
-    driver.set_rgb(blue)?;
-    FreeRtos::delay_ms(1000);
-    driver.clear()?;
+    // driver.set_rgb(Ok(blue))?;
+    // FreeRtos::delay_ms(1000);
+    // driver.clear()?;
     
 
 
@@ -97,54 +97,64 @@ fn main() -> Result<()> {
     log::info!("Device UUID: {}", uuid);
     let mqtt_cfg = MqttClientConfiguration::default();
 
-    // likely using test.mosquitto or other public broker, plain mqtt://<> url if no creds
-    let broker_url = if config.mqtt_user != "" {
-        format!(
-            "mqtt://{}:{}@{}",
-            config.mqtt_user, config.mqtt_pass, config.mqtt_broker
-        )
-    } else {
-        format!("mqtt://{}", config.mqtt_broker)
-    };
+    // // likely using test.mosquitto or other public broker, plain mqtt://<> url if no creds
+    // let broker_url = if config.mqtt_user != "" {
+    //     format!(
+    //         "mqtt://{}:{}@{}",
+    //         config.mqtt_user, config.mqtt_pass, config.mqtt_broker
+    //     )
+    // } else {
+    //     format!("mqtt://{}", config.mqtt_broker)
+    // };
 
-    let mut mqtt_client = esp_idf_svc::mqtt::client::EspMqttClient::new_cb(
-        &broker_url,
-        &mqtt_cfg,
-        move |_msg| {
-            // closure body, no callback
-        },
-    )?;
+    // let mut mqtt_client = esp_idf_svc::mqtt::client::EspMqttClient::new_cb(
+    //     &broker_url,
+    //     &mqtt_cfg,
+    //     move |_msg| {
+    //         // closure body, no callback
+    //     },
+    // )?;
 
-    // empty payload
-    let payload: &[u8] = &[];
-    mqtt_client.enqueue(
-        format!("{}/hello", uuid).as_str(), 
-        esp_idf_svc::mqtt::client::QoS::AtLeastOnce, 
-        true, 
-        &payload)?;
+    // // empty payload
+    // let payload: &[u8] = &[];
+    // mqtt_client.enqueue(
+    //     format!("{}/hello", uuid).as_str(), 
+    //     esp_idf_svc::mqtt::client::QoS::AtLeastOnce, 
+    //     true, 
+    //     payload)?;
+
+
+
 
     // main loop    
     loop{
-        // this keeps i2c locked
-        let temp = i2c.temp_sensor
-            .lock()
-            .unwrap()
-            .measure_temperature(shtcx::PowerMode::NormalMode, &mut FreeRtos)
-            .unwrap()
-            .as_degrees_celsius();
-        // mqtt will send float as 'big endian network bytes'
-        log::info!("Temperature: {:?} °C Bytes: {:?}", temp, &temp.to_be_bytes());
+        // // this keeps i2c locked
+        // let temp = i2c.temp_sensor
+        //     .lock()
+        //     .unwrap()
+        //     .measure_temperature(shtcx::PowerMode::NormalMode, &mut FreeRtos)
+        //     .unwrap()
+        //     .as_degrees_celsius();
+        // // mqtt will send float as 'big endian network bytes'
+        // log::info!("Temperature: {:?} °C Bytes: {:?}", temp, &temp.to_be_bytes());
         
 
         // publish temperature to mqtt topic
-        mqtt_client.enqueue(
-            format!("test").as_str(),
-            esp_idf_svc::mqtt::client::QoS::AtLeastOnce,
-            false,
-            &temp.to_be_bytes(),
-        )?;
+        // mqtt_client.enqueue(
+        //     format!("test").as_str(),
+        //     esp_idf_svc::mqtt::client::QoS::AtLeastOnce,
+        //     false,
+        //     &temp.to_be_bytes(),
+        // )?;
 
-        FreeRtos::delay_ms(1000);
+
+
+        // FreeRtos::delay_ms(1000);
+
+        let rgb_shifted = RMTDriver::color_shifter();
+        driver.set_rgb(rgb_shifted)?;
+        FreeRtos::delay_ms(50);
+
     }
 }
 
