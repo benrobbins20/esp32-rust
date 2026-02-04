@@ -29,9 +29,9 @@ pub struct Config {
     wifi_password: &'static str,
     #[default("test.mosquitto.org")]
     mqtt_broker: &'static str,
-    #[default("bob")]
+    #[default("")]
     mqtt_user: &'static str,
-    #[default("bob")]
+    #[default("")]
     mqtt_pass: &'static str
 }
 
@@ -56,7 +56,7 @@ fn main() -> Result<()> {
         peripherals.modem, 
         sysloop.clone())?;
             
-    // wifi.connect()?;
+    wifi.connect()?;
 
     let i2c = I2CManager::new(pins.gpio10, pins.gpio8, peripherals.i2c0);
     // let ts = i2c.temp_sensor.clone();
@@ -98,30 +98,30 @@ fn main() -> Result<()> {
     let mqtt_cfg = MqttClientConfiguration::default();
 
     // // likely using test.mosquitto or other public broker, plain mqtt://<> url if no creds
-    // let broker_url = if config.mqtt_user != "" {
-    //     format!(
-    //         "mqtt://{}:{}@{}",
-    //         config.mqtt_user, config.mqtt_pass, config.mqtt_broker
-    //     )
-    // } else {
-    //     format!("mqtt://{}", config.mqtt_broker)
-    // };
+    let broker_url = if config.mqtt_user != "" {
+        format!(
+            "mqtt://{}:{}@{}",
+            config.mqtt_user, config.mqtt_pass, config.mqtt_broker
+        )
+    } else {
+        format!("mqtt://{}", config.mqtt_broker)
+    };
 
-    // let mut mqtt_client = esp_idf_svc::mqtt::client::EspMqttClient::new_cb(
-    //     &broker_url,
-    //     &mqtt_cfg,
-    //     move |_msg| {
-    //         // closure body, no callback
-    //     },
-    // )?;
+    let mut mqtt_client = esp_idf_svc::mqtt::client::EspMqttClient::new_cb(
+        &broker_url,
+        &mqtt_cfg,
+        move |_msg| {
+            // closure body, no callback
+        },
+    )?;
 
     // // empty payload
-    // let payload: &[u8] = &[];
-    // mqtt_client.enqueue(
-    //     format!("{}/hello", uuid).as_str(), 
-    //     esp_idf_svc::mqtt::client::QoS::AtLeastOnce, 
-    //     true, 
-    //     payload)?;
+    let payload: &[u8] = &[];
+    mqtt_client.enqueue(
+        format!("{}/hello", uuid).as_str(), 
+        esp_idf_svc::mqtt::client::QoS::AtLeastOnce, 
+        true, 
+        payload)?;
 
 
 
@@ -129,31 +129,31 @@ fn main() -> Result<()> {
     // main loop    
     loop{
         // // this keeps i2c locked
-        // let temp = i2c.temp_sensor
-        //     .lock()
-        //     .unwrap()
-        //     .measure_temperature(shtcx::PowerMode::NormalMode, &mut FreeRtos)
-        //     .unwrap()
-        //     .as_degrees_celsius();
-        // // mqtt will send float as 'big endian network bytes'
-        // log::info!("Temperature: {:?} °C Bytes: {:?}", temp, &temp.to_be_bytes());
+        let temp = i2c.temp_sensor
+            .lock()
+            .unwrap()
+            .measure_temperature(shtcx::PowerMode::NormalMode, &mut FreeRtos)
+            .unwrap()
+            .as_degrees_celsius();
+        // mqtt will send float as 'big endian network bytes'
+        log::info!("Temperature: {:?} °C Bytes: {:?}", temp, &temp.to_be_bytes());
         
 
         // publish temperature to mqtt topic
-        // mqtt_client.enqueue(
-        //     format!("test").as_str(),
-        //     esp_idf_svc::mqtt::client::QoS::AtLeastOnce,
-        //     false,
-        //     &temp.to_be_bytes(),
-        // )?;
+        mqtt_client.enqueue(
+            format!("test").as_str(),
+            esp_idf_svc::mqtt::client::QoS::AtLeastOnce,
+            false,
+            &temp.to_be_bytes(),
+        )?;
 
 
 
         // FreeRtos::delay_ms(1000);
 
-        let rgb_shifted = RMTDriver::color_shifter();
-        driver.set_rgb(rgb_shifted)?;
-        FreeRtos::delay_ms(50);
+        // let rgb_shifted = RMTDriver::color_shifter();
+        // driver.set_rgb(rgb_shifted)?;
+        FreeRtos::delay_ms(5000);
 
     }
 }
