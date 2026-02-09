@@ -91,12 +91,12 @@ async fn main(spawner: Spawner) {
 
     info!("Embassy initialized!");
 
-    let rng = esp_hal::rng::Rng::new(peripherals.RNG);
-    let timer1 = TimerGroup::new(peripherals.TIMG0);
-    let wifi_init =
-        esp_wifi::init(timer1.timer0, rng).expect("Failed to initialize WIFI/BLE controller");
-    let (mut _wifi_controller, _interfaces) = esp_wifi::wifi::new(&wifi_init, peripherals.WIFI)
-        .expect("Failed to initialize WIFI controller");
+    // let rng = esp_hal::rng::Rng::new(peripherals.RNG);
+    // let timer1 = TimerGroup::new(peripherals.TIMG0);
+    // let wifi_init =
+    //     esp_wifi::init(timer1.timer0, rng).expect("Failed to initialize WIFI/BLE controller");
+    // let (mut _wifi_controller, _interfaces) = esp_wifi::wifi::new(&wifi_init, peripherals.WIFI)
+    //     .expect("Failed to initialize WIFI controller");
 
 
     // assign pins
@@ -111,11 +111,11 @@ async fn main(spawner: Spawner) {
   
     // TODO: Spawn some tasks
     let _ = spawner;
-    // spawner.spawn(blinky_task(led)).unwrap();
+    spawner.spawn(blinky_task(led)).unwrap();
     // spawner.spawn(encoder(a, b)).unwrap();
-    spawner.spawn(motor(step, dir)).unwrap();
+    //spawner.spawn(motor(step, dir)).unwrap();
     // loop {
-    //     info!("H∏autello world!");
+    //     info!("Hello world!");
     //     Timer::after(Duration::from_secs(1)).await;
     // }
 
