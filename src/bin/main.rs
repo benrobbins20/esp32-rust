@@ -42,6 +42,15 @@ async fn blinky_task(led: Output<'static>) {
 }
 
 #[embassy_executor::task]
+async fn motor(step: Output<'static>, dir: Output<'static>) {
+    let mut step = step;
+    loop {
+        step.toggle();
+        Timer::after(Duration::from_millis(20)).await;
+    }
+}
+
+#[embassy_executor::task]
 async fn encoder(a: Input<'static>, b: Input<'static>) {
 
     let mut rotary_encoder = rotary_encoder_hal::Rotary::new(a, b);
@@ -60,6 +69,8 @@ async fn encoder(a: Input<'static>, b: Input<'static>) {
         print!("Counter: {}\n", counter);
     }
 }
+
+
 
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) {
@@ -88,19 +99,23 @@ async fn main(spawner: Spawner) {
         .expect("Failed to initialize WIFI controller");
 
 
-    let led: Output<'_> = esp_hal::gpio::Output::new(peripherals.GPIO7, Level::Low, OutputConfig::default()); 
-    let a = Input::new(peripherals.GPIO4, InputConfig::default().with_pull(Pull::Up));
-    let b = Input::new(peripherals.GPIO5, InputConfig::default().with_pull(Pull::Up));
+    // assign pins
+    let led: Output<'_> = Output::new(peripherals.GPIO7, Level::Low, OutputConfig::default()); 
+    let a = Input::new(peripherals.GPIO0, InputConfig::default().with_pull(Pull::Up));
+    let b = Input::new(peripherals.GPIO1, InputConfig::default().with_pull(Pull::Up));
+    let step = Output::new(peripherals.GPIO19, Level::Low, OutputConfig::default());
+    let dir = Output::new(peripherals.GPIO18, Level::Low, OutputConfig::default());
+
 
 
   
     // TODO: Spawn some tasks
     let _ = spawner;
-    spawner.spawn(blinky_task(led)).unwrap();
-    spawner.spawn(encoder(a, b)).unwrap();
-
+    // spawner.spawn(blinky_task(led)).unwrap();
+    // spawner.spawn(encoder(a, b)).unwrap();
+    spawner.spawn(motor(step, dir)).unwrap();
     // loop {
-    //     info!("Hello world!");
+    //     info!("H∏autello world!");
     //     Timer::after(Duration::from_secs(1)).await;
     // }
 
