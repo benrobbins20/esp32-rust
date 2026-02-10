@@ -6,6 +6,8 @@
     holding buffers for the duration of a data transfer."
 )]
 
+use core::sync::atomic::{AtomicI32};
+use core::sync::atomic::Ordering;
 use embassy_executor::Spawner;
 use embassy_futures::select::select;
 use embassy_time::{Duration, Timer};
@@ -30,6 +32,8 @@ extern crate alloc;
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
 esp_bootloader_esp_idf::esp_app_desc!();
 
+// static delay for atomic read/write speed
+static DELAY: AtomicI32 = AtomicI32::new(0);
 
 #[embassy_executor::task]
 async fn blinky_task(led: Output<'static>) {
@@ -44,9 +48,34 @@ async fn blinky_task(led: Output<'static>) {
 #[embassy_executor::task]
 async fn motor(step: Output<'static>, dir: Output<'static>) {
     let mut step = step;
+    let mut dir = dir;
     loop {
+        // relaxed: no ordering before or after load
+        // acquire: store.release -> load.acquire
+        let delay = DELAY.load(Ordering::Relaxed);
+
+        // do nothing if zero or default
+        if (delay == 0) {
+            Timer::after(Duration::from_millis(100)).await;
+            continue;
+        }
+        
+        // set direction
+        if (delay > 0) {
+            dir.set_high();
+        }
+        else {
+            dir.set_low();
+        }
+
+        // set limits for delay
+        let delay = delay.abs()
+            .max(50) // this is the LOWER limit
+            .min(100_000); // upper limit 
+
+
         step.toggle();
-        Timer::after(Duration::from_millis(20)).await;
+        Timer::after(Duration::from_micros(delay as u64)).await;
     }
 }
 
@@ -67,6 +96,19 @@ async fn encoder(a: Input<'static>, b: Input<'static>) {
             rotary_encoder_hal::Direction::None => (),
         }
         print!("Counter: {}\n", counter);
+
+        // microseconds / delay.pow(3)
+        // ex: 1_000_000 / 100^3 = 1 second
+        if counter != 0 {
+            DELAY.store(1_000_000 / counter.pow(3), Ordering::Relaxed);
+        }
+
+        // no delay or no speed?
+        else {
+            DELAY.store(0, Ordering::Relaxed);
+        }
+
+        DELAY.store(counter, Ordering::Relaxed);
     }
 }
 
@@ -90,6 +132,7 @@ async fn main(spawner: Spawner) {
     esp_hal_embassy::init(timer0.alarm0);
 
     info!("Embassy initialized!");
+    Timer::after(Duration::from_millis(200)).await; // delay is required with for the info! macro in embassy task
 
     // let rng = esp_hal::rng::Rng::new(peripherals.RNG);
     // let timer1 = TimerGroup::new(peripherals.TIMG0);
@@ -103,8 +146,8 @@ async fn main(spawner: Spawner) {
     let led: Output<'_> = Output::new(peripherals.GPIO7, Level::Low, OutputConfig::default()); 
     let a = Input::new(peripherals.GPIO0, InputConfig::default().with_pull(Pull::Up));
     let b = Input::new(peripherals.GPIO1, InputConfig::default().with_pull(Pull::Up));
-    let step = Output::new(peripherals.GPIO19, Level::Low, OutputConfig::default());
-    let dir = Output::new(peripherals.GPIO18, Level::Low, OutputConfig::default());
+    let step = Output::new(peripherals.GPIO2, Level::Low, OutputConfig::default());
+    let dir = Output::new(peripherals.GPIO3, Level::Low, OutputConfig::default());
 
 
 
@@ -112,8 +155,8 @@ async fn main(spawner: Spawner) {
     // TODO: Spawn some tasks
     let _ = spawner;
     spawner.spawn(blinky_task(led)).unwrap();
-    // spawner.spawn(encoder(a, b)).unwrap();
-    //spawner.spawn(motor(step, dir)).unwrap();
+    spawner.spawn(encoder(a, b)).unwrap();
+    spawner.spawn(motor(step, dir)).unwrap();
     // loop {
     //     info!("Hello world!");
     //     Timer::after(Duration::from_secs(1)).await;
