@@ -13,6 +13,7 @@ use embassy_futures::select::select;
 use embassy_time::{Duration, Timer};
 use esp_hal::clock::CpuClock;
 use esp_hal::gpio::{Input, InputConfig, Io, Level, Output, OutputConfig, Pull};
+use esp_hal::riscv::delay;
 use esp_hal::rtc_cntl::sleep::GPIO_INTR_HIGH_LEVEL;
 use esp_hal::timer::systimer::SystemTimer;
 use esp_hal::timer::timg::TimerGroup;
@@ -91,24 +92,39 @@ async fn encoder(a: Input<'static>, b: Input<'static>) {
         let result = select(a.wait_for_any_edge(),b.wait_for_any_edge()).await;
         let direction = rotary_encoder.update().unwrap();
         match direction {
-            rotary_encoder_hal::Direction::Clockwise => counter += 1,
-            rotary_encoder_hal::Direction::CounterClockwise => counter -= 1,
+            // i don't want the encoder to just increment into oblivion, clamp +- 150 counts
+            rotary_encoder_hal::Direction::Clockwise => {
+                counter += 1;
+                counter = counter.min(150);
+            },
+            rotary_encoder_hal::Direction::CounterClockwise => {
+                counter -= 1;
+                counter = counter.max(-150);
+            },
             rotary_encoder_hal::Direction::None => (),
         }
         print!("Counter: {}\n", counter);
 
+        // range +- 150 counts
+        let counter_clamped = counter.clamp(-150, 150);
+
         // microseconds / delay.pow(3)
-        // ex: 1_000_000 / 100^3 = 1 second
+        // ex: 1_000_000 / 100^3 = 1ms, this is pretty much as fast as the motor can
+        // clamp counter at 200 and use quadratic
         if counter != 0 {
-            DELAY.store(1_000_000 / counter.pow(3), Ordering::Relaxed);
+            // quad scale, min speed: 500_000 / 1^1 = 500ms, max speed: 500_000 / 150^2 = 22us 
+            let mag = counter_clamped.abs();
+            let delay = 500_000 / (mag * mag);
+
+            // retain the sign for direction, but in quadratic scaling
+            let delay_signed = if counter > 0 {delay} else {-delay};
+            DELAY.store(delay_signed, Ordering::Relaxed);
         }
 
-        // no delay or no speed?
+        // no delay ~ do nothing
         else {
             DELAY.store(0, Ordering::Relaxed);
         }
-
-        DELAY.store(counter, Ordering::Relaxed);
     }
 }
 
