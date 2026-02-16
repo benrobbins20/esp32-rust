@@ -1,0 +1,12 @@
+[package]
+name = "mqtt_mac"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.101"
+log = "0.4.29"
+rand = "0.9.2"
+rgb = "0.8.52"
+rumqttc = "0.25.1"
+uuid = { version = "1.19.0", features = ["v4"] }
