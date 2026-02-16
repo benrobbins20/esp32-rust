@@ -6,7 +6,7 @@ use rgb::{Rgba};
 use rgb::RGB;
 
 // thread safe counter for 0-255 for led color shift
-static position: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+static POSITION: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
 // mechanism to convert hex string to RGB color 
 #[derive(Debug, Clone, Copy)]
 pub struct Color {
@@ -50,6 +50,15 @@ impl From<Color> for u32 {
     }
 }
 
+impl From<[u8; 3]> for Color {
+    fn from(value: [u8; 3]) -> Self {
+        Self {
+            r: value[0],
+            g: value[1],
+            b: value[2],
+        }
+    }
+}
 
 // transmit driver for WS2812 RMT
 pub struct RMTDriver<'a> {
@@ -131,7 +140,7 @@ impl<'a> RMTDriver<'a> {
         let rgb_val: [u8;3];
         // everytime function is called, atomic increment static pos counter
         // name this outer position to tell which is global and which is local which is zeroed in each segment
-        let outer_pos = position.fetch_add(1, core::sync::atomic::Ordering::SeqCst);
+        let outer_pos = POSITION.fetch_add(1, core::sync::atomic::Ordering::SeqCst);
     
         // initially starting 255, 0, 0 (red)
         if (outer_pos < 85) {

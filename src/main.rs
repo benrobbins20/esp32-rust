@@ -10,6 +10,8 @@ use esp_idf_svc::http::server::Configuration as HttpConfiguration;
 use shtcx::{ShtCx, sensor_class::Sht2Gen, shtc3};
 use uuid::Uuid;
 use uuid;
+use log::{error, info, warn};
+use embedded_svc::mqtt::client::EventPayload::Error;
 
 // bring in utils library
 mod utils; 
@@ -35,13 +37,14 @@ pub struct Config {
     mqtt_pass: &'static str
 }
 
-// const UUID: String = Uuid::new_v4().to_string();
+
 
 
 
 fn main() -> Result<()> {   
     esp_idf_svc::sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
+    esp_idf_svc::nvs::EspDefaultNvsPartition::take()?; // store the calibration data in NVS
 
     let peripherals = Peripherals::take().unwrap();
     let sysloop = EspSystemEventLoop::take().unwrap();
@@ -94,7 +97,7 @@ fn main() -> Result<()> {
 
 
     let uuid = Uuid::new_v4().to_string();
-    log::info!("Device UUID: {}", uuid);
+    info!("Device UUID: {}", uuid);
     let mqtt_cfg = MqttClientConfiguration::default();
 
     // // likely using test.mosquitto or other public broker, plain mqtt://<> url if no creds
@@ -107,21 +110,49 @@ fn main() -> Result<()> {
         format!("mqtt://{}", config.mqtt_broker)
     };
 
+    
     let mut mqtt_client = esp_idf_svc::mqtt::client::EspMqttClient::new_cb(
         &broker_url,
         &mqtt_cfg,
-        move |_msg| {
-            // closure body, no callback
+        // closure essentially inline function
+        move |message_event| match message_event.payload() {
+            esp_idf_svc::mqtt::client::EventPayload::Received { data, details, topic, id } => {
+                // info!("Received MQTT message: topic: {:?}, data: {:?}, details: {:?}, id: {:?}", topic, data, details, id);
+                if topic == Some("color") {
+                    log::info!("Received color message: {:?}", data);
+                    if data.len() == 3 {
+                        // take data (&[u8]) and convert to [u8;3] 
+                        let rgb: [u8;3] = data.try_into().unwrap(); 
+                        let color = Color::from(rgb);
+                        driver.set_rgb(Ok(color)).unwrap();
+                    }
+                }
+            },
+            // 
+            Error(e) => {
+                warn!("MQTT error: {:?}", e);
+            },
+            // catch all
+            _ => {
+                // handle other events like Connected, Disconnected, Published, etc.
+                info!("MQTT payload: {:?}", message_event.payload());
+            }
         },
     )?;
 
-    // // empty payload
+
+    // publish a hello/uuid message to initiate the mqtt client
     let payload: &[u8] = &[];
-    mqtt_client.enqueue(
-        format!("{}/hello", uuid).as_str(), 
+    mqtt_client.publish(
+        format!("hello/{}", uuid).as_str(), 
         esp_idf_svc::mqtt::client::QoS::AtLeastOnce, 
         true, 
         payload)?;
+
+    // can then subscribe with mqtt state machine connected
+    mqtt_client.subscribe("color", esp_idf_svc::mqtt::client::QoS::AtLeastOnce)?;
+
+
 
 
 
@@ -141,7 +172,7 @@ fn main() -> Result<()> {
 
         // publish temperature to mqtt topic
         mqtt_client.enqueue(
-            format!("test").as_str(),
+            format!("temp").as_str(),
             esp_idf_svc::mqtt::client::QoS::AtLeastOnce,
             false,
             &temp.to_be_bytes(),
@@ -183,3 +214,5 @@ fn temperature(content: String) -> String {
 fn index() -> String {
     html_template("hello from ESP32".to_string())
 }
+
+// fn 
