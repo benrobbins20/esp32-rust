@@ -21,3 +21,6 @@ target/
 
 # why tf is main discluded
 # src/bin/main.rs
+
+# secrets and custom config
+cfg.toml
